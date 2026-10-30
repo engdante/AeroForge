@@ -1,0 +1,33 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ---- AeroForge: потребителски данни ----
+# настройките са специфични за машината (филаменти, цени, легло на принтера)
+settings.json
+# записаните дизайни и отчетите не се качват в git
+designs/*.json
+exports/*
+!designs/.gitkeep
+!exports/.gitkeep
+
+# ---- PyInstaller ----
+build/
+dist/
+*.manifest
+
+# ---- редактори / ОС ----
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- локални временни файлове ----
+*.log
+tmp/

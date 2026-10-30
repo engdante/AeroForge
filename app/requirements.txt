@@ -1,0 +1,4 @@
+# AeroForge — зависимости за изпълнение
+# Единствената реална зависимост е eel (тя включва bottle, bottle-websocket,
+# gevent, whichcraft). Изчисленията са на чист Python (math, json, csv).
+eel>=0.18,<1.0

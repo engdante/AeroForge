@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AeroForge — калкулатор и генератор на RC самолет</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">✈ <span>Aero</span>Forge</div>
+    <div class="chip" id="missionChip">Треньор</div>
+    <div class="spacer"></div>
+    <input id="designName" class="name-input" value="Нов дизайн"
+           title="Име на дизайна" maxlength="50">
+    <button class="btn" id="btnExample" title="Зареди примерен дизайн">✨ Пример</button>
+    <button class="btn" id="btnSettings"
+            title="Настройки: филаменти, цени, базови стойности">⚙ Настройки</button>
+    <button class="btn" id="btnLoad" title="Заредени дизайни">📂 Дизайни</button>
+    <button class="btn" id="btnSave" title="Запази дизайна">💾 Запази</button>
+    <button class="btn btn-accent" id="btnExport"
+            title="Запиши отчет, BOM и JSON">📤 Отчет</button>
+  </header>
+
+  <main class="layout">
+
+    <section class="side">
+      <nav class="tabs">
+        <button class="tab-btn active" data-tab="payload">Товар</button>
+        <button class="tab-btn" data-tab="mission">Мисия</button>
+        <button class="tab-btn" data-tab="wing">Крило</button>
+        <button class="tab-btn" data-tab="tail">Опашка</button>
+        <button class="tab-btn" data-tab="power">Мотор</button>
+        <button class="tab-btn" data-tab="print">Печат</button>
+      </nav>
+
+      <div class="panes">
+
+        <div class="pane active" id="pane-payload">
+          <div class="field">
+            <label>Как ще зададеш товара?</label>
+            <div class="radio-row">
+              <label class="radio">
+                <input type="radio" name="payloadMode" value="simple" checked>
+                <span>Само общо тегло</span>
+              </label>
+              <label class="radio">
+                <input type="radio" name="payloadMode" value="components">
+                <span>Списък компоненти</span>
+              </label>
+            </div>
+          </div>
+
+          <div id="simpleBox">
+            <div class="field">
+              <label for="payloadTotal">Товар без конструкцията (g)</label>
+              <input type="number" id="payloadTotal" step="5" min="0"
+                     value="600">
+              <p class="hint">Мотори, ESC, батерия, серва, камера, кабели…
+                Приложението ще сметне конструкцията и ще провери баланса.</p>
+            </div>
+          </div>
+
+          <div id="componentsBox" class="hidden">
+            <div class="field">
+              <label>Компоненти</label>
+              <div class="component-table-head">
+                <span>Име</span><span>Кат.</span><span>Бр.</span>
+                <span>g</span><span>X mm</span><span></span>
+              </div>
+              <div id="componentRows" class="component-rows"></div>
+              <div class="row-actions">
+                <select id="presetSelect" class="grow">
+                  <option value="">+ от списък…</option>
+                </select>
+                <button class="btn btn-sm" id="btnAddComponent">+ Ред</button>
+              </div>
+              <p class="hint">X = позиция от носа (празно = автоматично).
+                Липсващите категории (мотор, ESC, батерия, серва…) се
+                оценяват автоматично.</p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="nLimit">Максимално натоварване n (g)</label>
+            <input type="number" id="nLimit" step="0.5" min="1.5" max="15"
+                   placeholder="авто">
+            <p class="hint">Треньор 4, спорт 6, 3D 8–10.</p>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-mission">
+          <div class="field">
+            <label for="missionSelect">Тип на модела</label>
+            <select id="missionSelect"></select>
+            <p class="hint" id="missionDesc"></p>
+          </div>
+          <div class="stats-mini" id="missionStats"></div>
+          <div class="field">
+            <label for="safetyFactor">Коефициент на сигурност</label>
+            <input type="number" id="safetyFactor" step="0.1" min="1" max="3"
+                   value="1.5">
+          </div>
+        </div>
+
+        <div class="pane" id="pane-wing">
+          <div class="field">
+            <label for="wingLoading">Натоварване на крилото (g/dm²)</label>
+            <input type="number" id="wingLoading" step="1" min="10" max="250"
+                   placeholder="авто">
+            <p class="hint" id="wingLoadingHint"></p>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="aspectRatio">Разтежение (AR)</label>
+              <input type="number" id="aspectRatio" step="0.1" min="3" max="16"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="taper">Свиване (c_tip/c_root)</label>
+              <input type="number" id="taper" step="0.05" min="0.25" max="1"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="dihedral">Диаедър (°)</label>
+              <input type="number" id="dihedral" step="0.5" placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="wingLeRatio">Крило от носа (% от фюзелажа)</label>
+              <input type="number" id="wingLeRatio" step="1" min="10" max="60"
+                     value="30">
+            </div>
+          </div>
+          <div class="field">
+            <label for="airfoilSelect">Профил</label>
+            <select id="airfoilSelect"></select>
+            <p class="hint" id="airfoilInfo"></p>
+          </div>
+          <canvas id="airfoilCanvas" width="330" height="130"></canvas>
+        </div>
+
+        <div class="pane" id="pane-tail">
+          <div class="field">
+            <label for="vh">Хоризонтален обемен коефициент V_h</label>
+            <input type="number" id="vh" step="0.05" min="0" max="1.2"
+                   placeholder="авто">
+            <p class="hint">Нормално 0.35–0.80.</p>
+          </div>
+          <div class="field">
+            <label for="vv">Вертикален обемен коефициент V_v</label>
+            <input type="number" id="vv" step="0.005" min="0" max="0.12"
+                   placeholder="авто">
+            <p class="hint">Нормално 0.015–0.060.</p>
+          </div>
+          <div class="field">
+            <label for="tailArm">Рамо на опашката (част от фюзелажа)</label>
+            <input type="number" id="tailArm" step="0.02" min="0.3" max="0.9"
+                   placeholder="авто">
+          </div>
+          <div class="field">
+            <label for="staticMargin">Статичен запас (% MAC)</label>
+            <input type="number" id="staticMargin" step="1" min="0" max="25"
+                   placeholder="авто">
+            <p class="hint">Треньор 10–15%, спорт 8–10%, 3D 5–8%,
+              крило без опашка 3–7%.</p>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-power">
+          <div class="grid-2">
+            <div class="field">
+              <label for="cells">Батерия (клетки)</label>
+              <input type="number" id="cells" step="1" min="1" max="14"
+                     value="3">
+            </div>
+            <div class="field">
+              <label for="capacity">Капацитет (mAh)</label>
+              <input type="number" id="capacity" step="50" min="100"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="field">
+            <label for="endurance">Желано време на полет (мин)</label>
+            <input type="number" id="endurance" step="1" min="1" max="120"
+                   value="8">
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="tw">Тяга : тегло</label>
+              <input type="number" id="tw" step="0.05" min="0.1" max="3"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="pw">Мощност (W/kg)</label>
+              <input type="number" id="pw" step="10" min="30" max="900"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="field">
+            <label for="propSize">Диаметър на витлото (инча)</label>
+            <select id="propSize"></select>
+            <p class="hint">Празно = автоматично (~25% от размаха).</p>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-print">
+          <div class="field">
+            <label for="filamentSelect">Филамент</label>
+            <select id="filamentSelect"></select>
+            <p class="hint" id="filamentInfo"></p>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="nozzle">Дюза (mm)</label>
+              <select id="nozzle">
+                <option value="0.4">0.4</option>
+                <option value="0.6">0.6</option>
+                <option value="0.8">0.8</option>
+              </select>
+            </div>
+            <div class="field">
+              <label for="layerHeight">Слой (mm)</label>
+              <input type="number" id="layerHeight" step="0.02" min="0.08"
+                     max="0.6" value="0.2">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="perimeters">Периметри (стени)</label>
+              <input type="number" id="perimeters" step="1" min="1" max="6"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="infill">Запълване (%)</label>
+              <input type="number" id="infill" step="1" min="0" max="100"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="field">
+            <label>Легло на принтера (mm)</label>
+            <div class="grid-3">
+              <input type="number" id="bedX" step="5" min="80" value="220">
+              <input type="number" id="bedY" step="5" min="80" value="220">
+              <input type="number" id="bedZ" step="5" min="80" value="250">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="side-footer">
+        <span id="calcStatus">готово</span>
+        <span class="spacer"></span>
+        <button class="btn btn-sm" id="btnReset">Нов</button>
+      </div>
+    </section>
+
+    <section class="results" id="results">
+      <div class="results-head">
+        <div class="verdict" id="verdict">Изчисляване…</div>
+        <div class="verdict-stats" id="verdictStats"></div>
+      </div>
+
+      <div class="cards" id="cards"></div>
+
+      <div class="block">
+        <h3>Проверки</h3>
+        <div id="checks" class="checks"></div>
+      </div>
+
+      <div class="block">
+        <h3>Геометрия</h3>
+        <table class="kv" id="geometryTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>Задвижване</h3>
+        <table class="kv" id="propulsionTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>Стабилност и център на тежестта</h3>
+        <table class="kv" id="stabilityTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>Якост на крилото</h3>
+        <table class="kv" id="structureTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>Печат</h3>
+        <table class="data" id="printTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>3D преглед</h3>
+        <div class="viewer-bar">
+          <button class="btn btn-sm" data-view="iso">3/4</button>
+          <button class="btn btn-sm" data-view="top">Отгоре</button>
+          <button class="btn btn-sm" data-view="side">Странично</button>
+          <button class="btn btn-sm" data-view="front">Отпред</button>
+          <span class="spacer"></span>
+          <span class="hint" id="modelInfo"></span>
+        </div>
+        <canvas id="model3d" width="900" height="460"></canvas>
+        <p class="hint">
+          Влачене с мишката завърта, колелцето мащабира, двойно щракване
+          връща изгледа 3/4. Моделът е опростен — показва пропорциите
+          (крило, фюзелаж, опашка, мотор), не е геометрия за печат.
+        </p>
+      </div>
+
+      <div class="block">
+        <h3>Графики</h3>
+        <div class="charts">
+          <div>
+            <div class="chart-title">Аеродинамично качество L/D</div>
+            <canvas id="chartLD" width="470" height="200"></canvas>
+          </div>
+          <div>
+            <div class="chart-title">Мощност: нужна / налична (W)</div>
+            <canvas id="chartPower" width="470" height="200"></canvas>
+          </div>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>Товар и маси</h3>
+        <table class="data" id="massTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>Сравнение на филаментите</h3>
+        <table class="data" id="filamentTable"></table>
+        <p class="hint">Същият обем конструкция, различна плътност.
+          LW-PLA е стандартът за печатани самолети.</p>
+      </div>
+
+      <div class="disclaimer">
+        Изчисленията са с емпирични модели за RC моделизъм — не са
+        сертификационни. Преди полет: провери ЦТ на реален модел, направи
+        статично изпитание на крилото (~3× полетното натоварване) и
+        ограничи хода на кормилата.
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="modal hidden" id="designsModal">
+  <div class="modal-box">
+    <div class="modal-head">
+      <h3>Записани дизайни</h3>
+      <button class="btn btn-sm" id="btnCloseModal">✕</button>
+    </div>
+    <div id="designsList" class="designs-list"></div>
+    <div class="modal-foot">
+      <span id="designsPath" class="hint"></span>
+    </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="settingsModal">
+  <div class="modal-box settings-box">
+    <div class="modal-head">
+      <h3>⚙ Настройки</h3>
+      <button class="btn btn-sm" id="btnCloseSettings">✕</button>
+    </div>
+
+    <div class="settings-body">
+      <section class="settings-section">
+        <h4>Филаменти</h4>
+        <p class="hint">
+          Плътността е на <b>отпечатаното</b> тяло (за LW-PLA е по-ниска от
+          тази на филамента). Цената е в € за kg. Тези стойности се използват
+          за масата, якостта, времето и цената на печата.
+        </p>
+        <div class="fil-head">
+          <span>Име</span><span>g/cm³</span><span>€/kg</span>
+          <span>MPa</span><span>E MPa</span><span>слоева</span>
+          <span>дебит</span><span>разпен.</span><span></span>
+        </div>
+        <div id="filamentRows" class="fil-rows"></div>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btnAddFilament">+ Нов филамент</button>
+        </div>
+      </section>
+
+      <section class="settings-section">
+        <h4>Базови стойности за нов дизайн</h4>
+        <div class="settings-grid">
+          <div class="field">
+            <label for="setDefaultFilament">Филамент по подразбиране</label>
+            <select id="setDefaultFilament"></select>
+          </div>
+          <div class="field">
+            <label for="setDefaultMission">Тип модел</label>
+            <select id="setDefaultMission"></select>
+          </div>
+          <div class="field">
+            <label for="setPayload">Начален товар (g)</label>
+            <input type="number" id="setPayload" step="10" min="0">
+          </div>
+          <div class="field">
+            <label for="setNozzle">Дюза (mm)</label>
+            <select id="setNozzle">
+              <option value="0.4">0.4</option>
+              <option value="0.6">0.6</option>
+              <option value="0.8">0.8</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="setPerimeters">Периметри</label>
+            <input type="number" id="setPerimeters" step="1" min="1" max="6"
+                   placeholder="авто">
+          </div>
+          <div class="field">
+            <label for="setInfill">Запълване (%)</label>
+            <input type="number" id="setInfill" step="1" min="0" max="100"
+                   placeholder="авто">
+          </div>
+          <div class="field">
+            <label for="setLayer">Слой (mm)</label>
+            <input type="number" id="setLayer" step="0.02" min="0.08" max="0.6">
+          </div>
+          <div class="field">
+            <label for="setCells">Батерия (клетки)</label>
+            <input type="number" id="setCells" step="1" min="1" max="14">
+          </div>
+          <div class="field">
+            <label for="setEndurance">Време на полет (мин)</label>
+            <input type="number" id="setEndurance" step="1" min="1" max="120">
+          </div>
+          <div class="field">
+            <label>Легло на принтера (mm)</label>
+            <div class="grid-3">
+              <input type="number" id="setBedX" step="5" min="60">
+              <input type="number" id="setBedY" step="5" min="60">
+              <input type="number" id="setBedZ" step="5" min="60">
+            </div>
+          </div>
+        </div>
+        <p class="hint" id="settingsPathInfo"></p>
+      </section>
+    </div>
+
+    <div class="modal-foot settings-foot">
+      <button class="btn btn-sm" id="btnResetSettings">↺ Възстанови начални</button>
+      <span class="spacer"></span>
+      <span id="settingsStatus" class="hint"></span>
+      <button class="btn" id="btnCancelSettings">Отказ</button>
+      <button class="btn btn-accent" id="btnSaveSettings">💾 Запази</button>
+    </div>
+  </div>
+</div>
+
+<script type="text/javascript" src="/eel.js"></script>
+<script src="js/api.js"></script>
+<script src="js/charts.js"></script>
+<script src="js/viewer3d.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/settings.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
+
+
+
+
