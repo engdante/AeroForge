@@ -17,9 +17,14 @@ materials.py — филаменти за 3D печат на RC модел.
     layer_factor    -      — ефективност на слоевата адхезия при огъване
     price_per_kg    €      — ориентировъчна цена
     max_flow        mm³/s  — практически обемен дебит при 0.4 mm дюза
-    expansion       -      — консумиран филамент / обем на детайла
-                              (>1 при разпенващи се LW филаменти)
+    expansion       -      — коефициент на разпенване (обем на детайла /
+                              обем на подадения материал). Информативен:
+                              изчисленията ползват printed_density, за да
+                              останат масата, филаментът и времето
+                              консистентни.
 """
+
+import math
 
 BUILTIN_FILAMENTS = {
     "pla": {
@@ -184,9 +189,12 @@ def _as_float(value, default):
     if value is None or value == "":
         return float(default)
     try:
-        return float(str(value).replace(",", "."))
+        number = float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return float(default)
+    if not math.isfinite(number):
+        return float(default)
+    return number
 
 
 def normalize_spec(key, spec):

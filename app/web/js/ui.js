@@ -211,19 +211,23 @@ const UI = {
     const mode = modeEl ? modeEl.value : "simple";
 
     const components = [];
-    document.querySelectorAll("#componentRows .component-row").forEach((row) => {
-      const name = row.querySelector(".c-name").value.trim();
-      const mass = row.querySelector(".c-mass").value.trim();
-      if (!name && !mass) return;
-      const xRaw = row.querySelector(".c-x").value.trim();
-      components.push({
-        name: name || "Компонент",
-        category: row.querySelector(".c-cat").value,
-        qty: Number(row.querySelector(".c-qty").value || 1),
-        unit_mass_g: Number(String(mass).replace(",", ".") || 0),
-        x_mm: xRaw === "" ? null : Number(xRaw.replace(",", ".")),
+    // В simple режим редовете са скрити, но остават в DOM. Не ги изпращай,
+    // иначе backend-ът ги добавя към общото тегло и масата се брои двойно.
+    if (mode === "components") {
+      document.querySelectorAll("#componentRows .component-row").forEach((row) => {
+        const name = row.querySelector(".c-name").value.trim();
+        const mass = row.querySelector(".c-mass").value.trim();
+        if (!name && !mass) return;
+        const xRaw = row.querySelector(".c-x").value.trim();
+        components.push({
+          name: name || "Компонент",
+          category: row.querySelector(".c-cat").value,
+          qty: Number(row.querySelector(".c-qty").value || 1),
+          unit_mass_g: Number(String(mass).replace(",", ".") || 0),
+          x_mm: xRaw === "" ? null : Number(xRaw.replace(",", ".")),
+        });
       });
-    });
+    }
 
     const marginPct = this._num("staticMargin");
     const wingLePct = this._num("wingLeRatio");
@@ -463,7 +467,11 @@ const UI = {
     addCard("Размах", fmt0(g.span_mm) + " mm",
       `площ ${fmt(g.area_dm2, 1)} dm² · AR ${fmt(g.aspect_ratio, 1)}`);
     addCard("Натоварване", fmt(g.wing_loading_g_dm2, 1) + " g/dm²",
-      `коренов хорд ${fmt0(g.c_root_mm)} mm`);
+      `коренов хорд ${fmt0(g.c_root_mm)} mm` +
+      (res.resolved.wing_loading_escalated
+        ? ` · вдигнато от ${fmt(res.resolved.wing_loading_requested, 0)}`
+        : ""),
+      res.resolved.wing_loading_escalated);
     addCard("V_stall", fmt(a.v_stall_ms, 1) + " m/s",
       fmt0(a.v_stall_kmh) + " km/h");
     addCard("Крейсер", fmt(a.v_cruise_ms, 1) + " m/s",
@@ -473,7 +481,9 @@ const UI = {
     addCard("Време на полет", "~" + fmt0(bat.endurance_min) + " мин",
       `${bat.cells}S ${fmt0(bat.capacity_mah)} mAh`);
     addCard("ЦТ", fmt(s.cg_pct_mac, 1) + " % MAC",
-      `статичен запас ${fmt(s.static_margin_pct, 0)} %`);
+      `статичен запас ${fmt(s.static_margin_pct, 0)} %` +
+      (s.battery_feasible === false ? " · ⚠️ балансът не е постижим" : ""),
+      s.battery_feasible === false);
     addCard("Профил", g.airfoil.name,
       `CL_max ${fmt(g.airfoil.cl_max, 2)} · t/c ` +
       `${fmt(st.thickness_ratio * 100, 0)} %`);
@@ -525,14 +535,17 @@ const UI = {
       ["Тяга (статична)",
         `${fmt(p.thrust_avail_n, 1)} N ≈ ${fmt(p.thrust_avail_kg, 2)} kg`],
       ["Витло", `${p.prop_d_in}×${p.prop_pitch_in} инча`],
-      ["Обороти", `${fmt0(p.rpm_target)} об/мин (лимит ${fmt0(p.rpm_tip)})`],
+      ["Обороти", `${fmt0(p.rpm_target)} об/мин (J ${fmt(p.advance_ratio_cruise, 2)}, лимит ${fmt0(p.rpm_tip)})`],
       ["Kv на мотора", fmt0(p.kv)],
-      ["Максимален ток", `${fmt(p.i_max_a, 1)} A → ESC ${p.esc_a} A`],
+      ["Максимален ток",
+        `${fmt(p.i_max_a, 1)} A → ESC ${p.esc_a} A` +
+        (p.esc_saturated ? " ⚠️" : "")],
       ["Батерия",
         `${bat.cells}S ${fmt0(bat.capacity_mah)} mAh, ` +
         `${fmt(bat.energy_wh, 1)} Wh`],
       ["Нужен C-рейтинг", `${fmt(bat.c_rating_needed, 0)}C`],
-      ["Маса на батерията", `${fmt0(bat.mass_g)} g`],
+      ["Маса на батерията",
+        `${fmt0(bat.mass_g)} g (${bat.mass_source || "оценка"})`],
       ["Време на полет",
         `${fmt(bat.endurance_min, 0)} мин (цел ` +
         `${fmt(bat.endurance_target_min, 0)})`],
@@ -545,17 +558,27 @@ const UI = {
       ["ЦТ",
         `${fmt0(s.x_cg_mm)} mm от носа (${fmt(s.cg_pct_mac, 1)} % MAC)`],
       ["Аеродинамичен център", `${fmt0(s.x_ac_mm)} mm`],
+      ["Неутрална точка",
+        `${fmt0(s.x_np_mm)} mm (с приноса на опашката)`],
       ["Целеви ЦТ", `${fmt0(s.x_target_mm)} mm`],
       ["Статичен запас",
         `${fmt(s.static_margin_pct, 1)} % (цел ` +
         `${fmt(s.static_margin_target * 100, 0)} %)`],
-      ["Място за батерията", s.battery_x_required_mm !== null
-        ? `${fmt0(s.battery_x_required_mm)} mm от носа` : "—"],
+      ["Място за батерията",
+        s.battery_x_required_mm !== null
+          ? (s.battery_feasible === false
+            ? `${fmt0(s.battery_x_required_mm)} mm от носа — извън обхвата, ` +
+              `сложена на ${fmt0(s.battery_x_placed_mm)} mm`
+            : `${fmt0(s.battery_x_required_mm)} mm от носа`)
+          : "—"],
       ["Отместване спрямо авто", `${fmt0(s.battery_shift_mm)} mm`],
       ["Опашка (S_h / S_v)", res.mission.has_tail
         ? `${fmt(g.tail.s_h_dm2, 1)} / ${fmt(g.tail.s_v_dm2, 1)} dm²`
         : "без опашка"],
-      ["Рамо на опашката", `${fmt0(g.tail.l_h_mm)} mm`],
+      ["Рамо на опашката",
+        `${fmt0(g.tail.l_h_mm)} mm` +
+        (g.tail.tail_fit_limited
+          ? ` (конфиг. ${fmt0(g.tail.l_h_configured_mm)})` : "")],
       ["Обемни коефициенти",
         `V_h ${fmt(g.tail.vh, 2)} · V_v ${fmt(g.tail.vv, 3)}`],
     ]);
@@ -571,7 +594,8 @@ const UI = {
       ["Решение", st.solution],
       ["Карбон (ако е нужен)", st.carbon_required
         ? `${st.carbon.width_mm}×${st.carbon.thickness_mm} mm × ` +
-          `${st.carbon.count}`
+          `${st.carbon.count}` +
+          (st.carbon_for_stiffness ? " (за коравина)" : "")
         : "не е нужен"],
       ["Съединителна тръба",
         `⌀${st.joiner_tube.od_mm}×${st.joiner_tube.id_mm} mm × ` +
@@ -597,7 +621,8 @@ const UI = {
     const massRows = w.components.map((c) => [
       c.name + (c.estimated ? " (оценка)" : ""),
       c.category_label, fmt(c.qty, 0), fmt(c.unit_mass_g, 1),
-      fmt(c.mass_g, 1), fmt0(c.x_mm),
+      fmt(c.mass_g, 1),
+      fmt0(c.x_placed_mm !== undefined ? c.x_placed_mm : c.x_mm),
     ]);
     this.fillData(this.$("massTable"),
       ["Компонент", "Категория", "Бр.", "Ед. g", "Общо g", "X mm"],

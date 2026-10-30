@@ -3,8 +3,9 @@ structure.py — якостна проверка на крилото и избо
 
 Модел: конзола, натоварена с елиптично разпределение на подемната сила.
     M_root = (n·W/2)·(4/(3π))·(b/2) = 0.1061·n·W·b
-Използва се итеративно с коефициент на сигурност 1.5 (сертификационна
-практика за леки конструкции).
+Граничният момент е M_ult = M_root · SF (SF = 1.5, практика за леки
+конструкции). Коефициентът на сигурност се прилага САМО веднъж — върху
+натоварването; допустимото напрежение е материална характеристика.
 """
 
 import math
@@ -15,7 +16,9 @@ from . import presets
 G = 9.80665
 ELLIPTIC_CENTROID = 4.0 / (3.0 * math.pi)          # 0.4244
 ROOT_MOMENT_COEFF = ELLIPTIC_CENTROID / 4.0        # 0.1061
-DEFLECTION_SHAPE_FACTOR = 0.64                     # елиптично vs върхов товар
+# δ_tip за елиптично натоварване спрямо δ на върхов точков товар
+# (P·L³/3EI при константно EI): ∫q(s)·(s²L/2 − s³/6)ds / (P·L³/3) = 0.29
+DEFLECTION_SHAPE_FACTOR = 0.29
 CARBON_ALLOW_MPA = 600.0      # pultruded карбон, с вграден запас
 CARBON_E_MPA = 90000.0
 DEFLECTION_LIMIT_RATIO = 0.08  # % от полуразмаха
@@ -37,21 +40,32 @@ def spar_height_mm(c_root_mm, thickness_ratio, factor=0.85):
 
 
 def allowable_print_stress_mpa(filament, safety_factor=1.5):
-    """Допустимо напрежение за печатан елемент (опън по слоеве)."""
+    """
+    Допустимо напрежение за печатан елемент (опън по слоеве).
+
+    В analyse() се вика с safety_factor=1.0, защото коефициентът на
+    сигурност вече е приложен към граничния момент (M_ult = M_root·SF).
+    Така SF участва точно веднъж.
+    """
     return (filament["tensile_mpa"] * filament["layer_factor"]
             / max(1.0, safety_factor))
 
 
-def pick_carbon_strip(area_needed_mm2):
+def pick_carbon_strip(area_needed_mm2, max_width_mm=None):
     """
     Избира карбонова лента (ширина, дебелина) и брой слоеве на капса.
 
+    max_width_mm ограничава ширината до наличната ширина на капса.
     връща dict с избрания профил и броя ленти.
     """
+    candidates = [(w, t) for (w, t) in presets.CARBON_STRIPS_MM
+                  if not max_width_mm or w <= max_width_mm]
+    if not candidates:
+        candidates = list(presets.CARBON_STRIPS_MM)
     best = None
-    for width, thick in presets.CARBON_STRIPS_MM:
+    for width, thick in candidates:
         area = width * thick
-        count = int(math.ceil(area_needed_mm2 / area))
+        count = max(1, int(math.ceil(area_needed_mm2 / area)))
         cand = {
             "width_mm": width,
             "thickness_mm": thick,
@@ -85,8 +99,8 @@ def analyse(mass_kg, geom, filament, mission, airfoil_key,
     t_ratio = airfoils.thickness_of(airfoil_key)
     h_mm = spar_height_mm(geom["c_root_mm"], t_ratio)
 
-    sigma_print = allowable_print_stress_mpa(filament, sf)
-    cap_area_req = (m_ult * 1000.0) / (h_mm * sigma_print) if h_mm > 0 else 0.0
+    sigma_mat = allowable_print_stress_mpa(filament, 1.0)
+    cap_area_req = (m_ult * 1000.0) / (h_mm * sigma_mat) if h_mm > 0 else 0.0
 
     # Какво може да се отпечата: ширина на капса × дебелина на стената
     cap_width_max = min(0.35 * geom["c_root_mm"], 30.0)
@@ -96,25 +110,56 @@ def analyse(mass_kg, geom, filament, mission, airfoil_key,
     cap_area_print = cap_width_max * wall_mm
     print_ok = cap_area_req <= cap_area_print
 
-    carbon = pick_carbon_strip(cap_area_req)
+    # Карбонът поема само недостига, но двата материала работят при
+    # еднаква деформация. Карбонът е много по-твърд, затова при
+    # достигане на неговото допустимо напрежение печатаният капс е
+    # натоварен само до E_print/E_carbon от своето. Това е по-консервативно
+    # от простото сумиране на две допустими напрежения.
+    e_print = filament["e_mpa"] * 0.8
+    sigma_print_compat = (min(sigma_mat,
+                              CARBON_ALLOW_MPA * e_print / CARBON_E_MPA)
+                          if CARBON_E_MPA > 0 else 0.0)
+    m_print_capacity = cap_area_print * h_mm * sigma_mat / 1000.0
+    m_print_compat = cap_area_print * h_mm * sigma_print_compat / 1000.0
+    m_missing = max(0.0, m_ult - m_print_compat)
+    carbon_area_req = ((m_missing * 1000.0) / (h_mm * CARBON_ALLOW_MPA)
+                       if h_mm > 0 else 0.0)
+    carbon = pick_carbon_strip(carbon_area_req, cap_width_max)
     carbon_area = carbon["total_area_mm2"]
 
-    # Деформация на върха
+    # Деформация на върха. EI се смята от ДВАТА материала, които реално
+    # носят огъването: печатаният капс + (ако има) карбоновата лента.
     semispan_mm = geom["span_mm"] / 2.0
     p_half = n * mass_kg * G / 2.0
 
-    def tip_deflection(area_mm2, e_mpa):
-        if area_mm2 <= 0 or h_mm <= 0:
+    def tip_deflection(area_mm2, e_mpa, extra_area_mm2=0.0, extra_e_mpa=0.0):
+        if h_mm <= 0:
             return 0.0
-        inertia = 2.0 * area_mm2 * (h_mm / 2.0) ** 2 * 1.15
+        ei = (2.0 * 1.15 * (h_mm / 2.0) ** 2
+              * (area_mm2 * e_mpa + extra_area_mm2 * extra_e_mpa))
+        if ei <= 0:
+            return 0.0
         return (DEFLECTION_SHAPE_FACTOR * p_half * semispan_mm ** 3
-                / (3.0 * e_mpa * inertia))
+                / (3.0 * ei))
 
     e_print = filament["e_mpa"] * 0.8
     defl_print = tip_deflection(min(cap_area_req, cap_area_print), e_print)
-    defl_carbon = tip_deflection(carbon_area, CARBON_E_MPA)
-
+    defl_carbon = tip_deflection(cap_area_print, e_print,
+                                 carbon_area, CARBON_E_MPA)
     defl_limit = DEFLECTION_LIMIT_RATIO * semispan_mm
+
+    # Карбон може да е нужен и само за коравина, когато якостта стига.
+    stiffness_required = print_ok and defl_print > defl_limit
+    carbon_required = (not print_ok) or stiffness_required
+    if not carbon_required:
+        carbon["count"] = 0
+
+    if not carbon_required:
+        solution = "печатан спар"
+    elif print_ok:
+        solution = "печатан спар + карбон (за коравина)"
+    else:
+        solution = "печатан + карбонова лента"
 
     # Съединителна тръба за сглобяемо крило
     tube_od_target = presets.clamp(0.55 * h_mm, 4.0, 16.0)
@@ -122,7 +167,6 @@ def analyse(mass_kg, geom, filament, mission, airfoil_key,
                key=lambda t: abs(t[0] - tube_od_target))
     joiner_len = int(round(1.1 * geom["c_root_mm"] / 10.0) * 10)
 
-    solution = "печатан спар" if print_ok else "печатан + карбонова лента"
     return {
         "n_limit": n,
         "safety_factor": sf,
@@ -130,20 +174,26 @@ def analyse(mass_kg, geom, filament, mission, airfoil_key,
         "m_ult_nm": m_ult,
         "thickness_ratio": t_ratio,
         "spar_height_mm": h_mm,
-        "sigma_allow_mpa": sigma_print,
+        "sigma_allow_mpa": sigma_mat,
         "cap_area_req_mm2": cap_area_req,
         "cap_area_print_mm2": cap_area_print,
         "cap_width_mm": cap_width_max,
         "wall_mm": wall_mm,
         "print_ok": print_ok,
+        "print_capacity_nm": m_print_capacity,
+        "print_capacity_compat_nm": m_print_compat,
+        "sigma_print_at_carbon_mpa": sigma_print_compat,
         "solution": solution,
         "carbon": carbon,
-        "carbon_required": not print_ok,
+        "carbon_area_req_mm2": carbon_area_req,
+        "carbon_required": carbon_required,
+        "carbon_for_stiffness": bool(stiffness_required),
         "carbon_strength_mpa": CARBON_ALLOW_MPA,
         "deflection_print_mm": defl_print,
         "deflection_carbon_mm": defl_carbon,
         "deflection_limit_mm": defl_limit,
-        "deflection_ok": (defl_carbon if not print_ok else defl_print) <= defl_limit,
+        "deflection_ok": (defl_carbon if carbon_required
+                          else defl_print) <= defl_limit,
         "joiner_tube": {
             "od_mm": tube[0],
             "id_mm": tube[1],

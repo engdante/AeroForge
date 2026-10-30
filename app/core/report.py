@@ -55,7 +55,7 @@ def build_bom_csv(res):
         writer.writerow([
             i, c["name"], c.get("category_label", ""), c["qty"],
             _f(c["unit_mass_g"], 1), _f(c["mass_g"], 1),
-            _f(c.get("x_mm"), 0),
+            _f(c.get("x_placed_mm", c.get("x_mm")), 0),
             "оценка" if c.get("estimated") else "зададено",
             c.get("note", ""),
         ])
@@ -116,12 +116,21 @@ def build_report_markdown(res):
         % _f(bat["endurance_min"], 0))
     add("| ЦТ | %s %% MAC |" % _f(s["cg_pct_mac"], 1))
     add("| Статичен запас | %s %% MAC |" % _f(s["static_margin_pct"], 1))
+    add("| Готов за полет | **%s** |"
+        % ("да" if s.get("ready_to_fly") else "не"))
     add("| Маса на печата | %s g (%s %%) |"
         % (_f(w["airframe_g"], 0), _f(w["airframe_pct"], 0)))
     add("| Печат: време / филамент / цена | %s h / %s g / %s € |"
         % (_f(pr["time_h"], 1), _f(pr["total_mass_g"], 0),
            _f(pr["cost"], 0)))
     add("")
+    if not w.get("budget_closed", True):
+        add("> ⚠️ **Масовият бюджет не се затваря**: геометрията е "
+            "оразмерена за %s g, а товар + конструкция = %s g (разлика "
+            "%s g). Дизайнът е невалиден — не го използвай за реален модел."
+            % (_f(w.get("geometry_total_g"), 0), _f(w["total_g"], 0),
+               _f(w.get("budget_gap_g"), 0)))
+        add("")
 
     add("## 2. Товар и маси")
     add("")
@@ -132,7 +141,7 @@ def build_report_markdown(res):
             % (c["name"], " _(оценка)_" if c.get("estimated") else "",
                c.get("category_label", ""), _f(c["qty"], 0),
                _f(c["unit_mass_g"], 1), _f(c["mass_g"], 1),
-               _f(c.get("x_mm"), 0)))
+               _f(c.get("x_placed_mm", c.get("x_mm")), 0)))
     add("| _Конструкция (печат)_ | — | — | — | %s | — |"
         % _f(w["airframe_g"], 1))
     add("| **Общо** | | | | **%s** | |" % _f(w["total_g"], 1))
@@ -151,12 +160,14 @@ def build_report_markdown(res):
     add("- Относително разтежение: %s, свиване: %s, диаедър: %s°"
         % (_f(g["aspect_ratio"], 1), _f(g["taper"], 2),
            _f(g["dihedral_deg"], 1)))
-    add("- CL_max: %s (каталожно %s) при Re %s"
+    add("- CL_max: %s (каталожно %s) при Re %s на загуба на подемна сила"
         % (_f(a["cl_max"], 2), _f(a["cl_max_catalog"], 2),
-           _f(a["re_cruise"], 0)))
+           _f(a["re_stall"], 0)))
     add("- L/D max: %s при CL = %s"
         % (_f(a["ld_max"], 1), _f(a["cl_at_ld_max"], 2)))
-    add("- CD0: %s, Oswald e: %s" % (_f(a["cd0"], 3), _f(a["oswald"], 2)))
+    add("- CD0: %s (CD_min на профила: %s), Oswald e: %s"
+        % (_f(a["cd0"], 3), _f(a.get("cd_min_airfoil"), 3),
+           _f(a["oswald"], 2)))
     add("- Нужна мощност в крейсер: %s W" % _f(a["power_required_w"], 0))
     add("")
 
@@ -169,16 +180,33 @@ def build_report_markdown(res):
         add("- Вертикална опашка: %s dm² (V_v = %s), рамо %s mm"
             % (_f(tail["s_v_dm2"], 1), _f(tail["vv"], 3),
                _f(tail["l_v_mm"], 0)))
+        if tail.get("tail_fit_limited"):
+            add("- ℹ️ **Опашката е ограничена от фюзелажа**: конфигурирано "
+                "рамо %s mm → ефективно %s mm; S_h/S_v са увеличени, за да "
+                "запазят V_h/V_v."
+                % (_f(tail.get("l_h_configured_mm"), 0),
+                   _f(tail.get("l_eff_mm"), 0)))
     else:
         add("- Крило без опашка (elevoni)")
     add("- ЦТ: %s mm от носа (%s %% MAC)"
         % (_f(s["x_cg_mm"], 0), _f(s["cg_pct_mac"], 1)))
-    add("- Аеродинамичен център: %s mm; целеви ЦТ: %s mm"
-        % (_f(s["x_ac_mm"], 0), _f(s["x_target_mm"], 0)))
+    add("- Аеродинамичен център: %s mm; неутрална точка: %s mm; "
+        "целеви ЦТ: %s mm"
+        % (_f(s["x_ac_mm"], 0), _f(s.get("x_np_mm"), 0),
+           _f(s["x_target_mm"], 0)))
     if s.get("battery_x_required_mm") is not None:
-        add("- **Постави батерията на %s mm от носа** (по подразбиране %s mm)"
-            % (_f(s["battery_x_required_mm"], 0),
-               _f(s["battery_x_default_mm"], 0)))
+        if s.get("battery_feasible", True):
+            add("- **Постави батерията на %s mm от носа** (по подразбиране "
+                "%s mm)" % (_f(s["battery_x_required_mm"], 0),
+                            _f(s["battery_x_default_mm"], 0)))
+        else:
+            add("- ⚠️ **Балансът не е постижим**: за целевия ЦТ батерията "
+                "трябва да е на %s mm от носа (фюзелаж %s mm). Реално "
+                "постижимият ЦТ е %s mm (%s %% MAC), статичен запас %s %%."
+                % (_f(s["battery_x_required_mm"], 0),
+                   _f(g["fuselage"]["length_mm"], 0),
+                   _f(s["x_cg_mm"], 0), _f(s["cg_pct_mac"], 1),
+                   _f(s["static_margin_pct"], 1)))
     add("- Водещ ръб на крилото: %s mm (препоръка: %s mm)"
         % (_f(g["wing_le_mm"], 0), _f(g.get("wing_le_recommended_mm"), 0)))
     add("")
@@ -189,15 +217,18 @@ def build_report_markdown(res):
         % (_f(p["p_max_elec_w"], 0), _f(p["p_max_shaft_w"], 0)))
     add("- Тяга (статична): %s N ≈ %s kg"
         % (_f(p["thrust_avail_n"], 1), _f(p["thrust_avail_kg"], 2)))
-    add("- Витло: %d×%d инча, ~%s об/мин, мотор Kv ≈ %s"
+    add("- Витло: %d×%d инча, ~%s об/мин (J ≈ %s), мотор Kv ≈ %s; "
+        "таван %s об/мин"
         % (p["prop_d_in"], p["prop_pitch_in"], _f(p["rpm_target"], 0),
-           _f(p["kv"], 0)))
-    add("- Максимален ток: %s A → ESC **%d A**"
-        % (_f(p["i_max_a"], 1), p["esc_a"]))
-    add("- Батерия: %dS %s mAh (%s Wh), нужни %sC, маса %s g"
+           _f(p.get("advance_ratio_cruise"), 2), _f(p["kv"], 0),
+           _f(p.get("rpm_tip"), 0)))
+    add("- Максимален ток: %s A → ESC **%d A**%s"
+        % (_f(p["i_max_a"], 1), p["esc_a"],
+           " ⚠️ над стандартния размер" if p.get("esc_saturated") else ""))
+    add("- Батерия: %dS %s mAh (%s Wh), нужни %sC, маса %s g (%s)"
         % (bat["cells"], _f(bat["capacity_mah"], 0),
            _f(bat["energy_wh"], 1), _f(bat["c_rating_needed"], 0),
-           _f(bat["mass_g"], 0)))
+           _f(bat["mass_g"], 0), bat.get("mass_source", "оценка")))
     add("- Време на полет: ~%s мин (при 80 %% използваем заряд)"
         % _f(bat["endurance_min"], 0))
     add("")
@@ -213,9 +244,17 @@ def build_report_markdown(res):
         % (_f(st["cap_area_req_mm2"], 1), _f(st["cap_area_print_mm2"], 1)))
     add("- Решение: **%s**" % st["solution"])
     if st["carbon_required"]:
-        add("- Карбон: лента %.0f×%.1f mm × %d на капс"
-            % (st["carbon"]["width_mm"], st["carbon"]["thickness_mm"],
-               st["carbon"]["count"]))
+        if st.get("carbon_for_stiffness"):
+            add("- Карбон (за коравина): лента %.0f×%.1f mm × %d на капс"
+                % (st["carbon"]["width_mm"],
+                   st["carbon"]["thickness_mm"], st["carbon"]["count"]))
+        else:
+            add("- Карбон: лента %.0f×%.1f mm × %d на капс (нужни %s mm² при "
+                "%s MPa)"
+                % (st["carbon"]["width_mm"], st["carbon"]["thickness_mm"],
+                   st["carbon"]["count"],
+                   _f(st.get("carbon_area_req_mm2"), 2),
+                   _f(st.get("carbon_strength_mpa"), 0)))
     add("- Съединителна тръба: ⌀%s×%s mm, дължина %s mm × %d"
         % (_f(st["joiner_tube"]["od_mm"], 1),
            _f(st["joiner_tube"]["id_mm"], 1),
@@ -335,6 +374,7 @@ def build_report_html(res):
         ("Тяга : тегло", "%s : 1" % _f(p["thrust_to_weight_actual"], 2)),
         ("Време на полет", "~%s мин" % _f(bat["endurance_min"], 0)),
         ("ЦТ", "%s %% MAC" % _f(s["cg_pct_mac"], 1)),
+        ("Готов за полет", "да" if s.get("ready_to_fly") else "не"),
         ("Печат", "%s g / %s h" % (_f(w["airframe_g"], 0),
                                    _f(pr["time_h"], 1))),
     ]
@@ -349,6 +389,13 @@ def build_report_html(res):
         parts.append('<div class="card"><div class="k">%s</div>'
                      '<div class="v">%s</div></div>' % (_esc(k), _esc(v)))
     parts.append("</div>")
+    if not w.get("budget_closed", True):
+        parts.append('<div class="note">⚠️ <b>Масовият бюджет не се '
+                     'затваря:</b> геометрията е оразмерена за %s g, а '
+                     'товар + конструкция = %s g (разлика %s g). Дизайнът '
+                     'е невалиден.</div>'
+                     % (_f(w.get("geometry_total_g"), 0),
+                        _f(w["total_g"], 0), _f(w.get("budget_gap_g"), 0)))
 
     parts.append("<h2>Товар и маси</h2>")
     rows = []
@@ -356,7 +403,7 @@ def build_report_html(res):
         rows.append([c["name"] + (" (оценка)" if c.get("estimated") else ""),
                      c.get("category_label", ""), _f(c["qty"], 0),
                      _f(c["unit_mass_g"], 1), _f(c["mass_g"], 1),
-                     _f(c.get("x_mm"), 0)])
+                     _f(c.get("x_placed_mm", c.get("x_mm")), 0)])
     rows.append(["Конструкция (печат)", "—", "—", "—",
                  _f(w["airframe_g"], 1), "—"])
     rows.append(["ОБЩО", "", "", "", _f(w["total_g"], 1), ""])
@@ -376,14 +423,34 @@ def build_report_html(res):
         parts.append("<li>Хоризонтална опашка %s dm², вертикална %s dm²</li>"
                      % (_f(g["tail"]["s_h_dm2"], 1),
                         _f(g["tail"]["s_v_dm2"], 1)))
-    parts.append("<li>ЦТ %s mm от носа (%s %% MAC), статичен запас %s %%</li>"
+        if g["tail"].get("tail_fit_limited"):
+            parts.append("<li>ℹ️ Опашката е ограничена от фюзелажа: "
+                         "конфиг. рамо %s mm → ефективно %s mm; площта е "
+                         "увеличена, за да запази V_h/V_v.</li>"
+                         % (_f(g["tail"].get("l_h_configured_mm"), 0),
+                            _f(g["tail"].get("l_eff_mm"), 0)))
+    parts.append("<li>ЦТ %s mm от носа (%s %% MAC), статичен запас %s %% "
+                 "спрямо неутралната точка (%s mm)</li>"
                  % (_f(s["x_cg_mm"], 0), _f(s["cg_pct_mac"], 1),
-                    _f(s["static_margin_pct"], 1)))
+                    _f(s["static_margin_pct"], 1),
+                    _f(s.get("x_np_mm"), 0)))
     if s.get("battery_x_required_mm") is not None:
-        parts.append("<li><b>Батерия на %s mm от носа</b> (по подразбиране "
-                     "%s mm)</li>"
-                     % (_f(s["battery_x_required_mm"], 0),
-                        _f(s["battery_x_default_mm"], 0)))
+        if s.get("battery_feasible", True):
+            parts.append("<li><b>Батерия на %s mm от носа</b> (по "
+                         "подразбиране %s mm)</li>"
+                         % (_f(s["battery_x_required_mm"], 0),
+                            _f(s["battery_x_default_mm"], 0)))
+        else:
+            parts.append("<li style=\"color:#ff7a7a\"><b>Балансът не е "
+                         "постижим</b>: за целевия ЦТ батерията трябва да е на "
+                         "%s mm (фюзелаж %s mm). Реалният ЦТ е %s mm "
+                         "(%s %% MAC), статичен запас %s %%. Сложи я на %s mm."
+                         "</li>"
+                         % (_f(s["battery_x_required_mm"], 0),
+                            _f(g["fuselage"]["length_mm"], 0),
+                            _f(s["x_cg_mm"], 0), _f(s["cg_pct_mac"], 1),
+                            _f(s["static_margin_pct"], 1),
+                            _f(s.get("battery_x_placed_mm"), 0)))
     parts.append("<li>Водещ ръб на крилото: %s mm (препоръка %s mm)</li>"
                  % (_f(g["wing_le_mm"], 0),
                     _f(g.get("wing_le_recommended_mm"), 0)))
@@ -393,14 +460,21 @@ def build_report_html(res):
     parts.append("<li>Мощност %s W, тяга %s N (%s kg)</li>"
                  % (_f(p["p_max_elec_w"], 0), _f(p["thrust_avail_n"], 1),
                     _f(p["thrust_avail_kg"], 2)))
-    parts.append("<li>Витло %d×%d инча, ~%s об/мин, Kv ≈ %s</li>"
+    parts.append("<li>Витло %d×%d инча, ~%s об/мин (J ≈ %s), Kv ≈ %s; "
+                 "таван %s об/мин</li>"
                  % (p["prop_d_in"], p["prop_pitch_in"],
-                    _f(p["rpm_target"], 0), _f(p["kv"], 0)))
-    parts.append("<li>Ток %s A → ESC %d A; батерия %dS %s mAh (%s Wh), "
-                 "%sC</li>"
-                 % (_f(p["i_max_a"], 1), p["esc_a"], bat["cells"],
-                    _f(bat["capacity_mah"], 0), _f(bat["energy_wh"], 1),
-                    _f(bat["c_rating_needed"], 0)))
+                    _f(p["rpm_target"], 0),
+                    _f(p.get("advance_ratio_cruise"), 2), _f(p["kv"], 0),
+                    _f(p.get("rpm_tip"), 0)))
+    parts.append("<li>Ток %s A → ESC %d A%s; батерия %dS %s mAh (%s Wh), "
+                 "%sC, маса %s g (%s)</li>"
+                 % (_f(p["i_max_a"], 1), p["esc_a"],
+                    " ⚠️ над стандартния размер"
+                    if p.get("esc_saturated") else "",
+                    bat["cells"], _f(bat["capacity_mah"], 0),
+                    _f(bat["energy_wh"], 1),
+                    _f(bat["c_rating_needed"], 0), _f(bat["mass_g"], 0),
+                    bat.get("mass_source", "оценка")))
     parts.append("</ul>")
 
     parts.append("<h2>Якост</h2><ul>")

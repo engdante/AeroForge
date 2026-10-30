@@ -5,6 +5,8 @@ compute() е чиста функция (dict -> dict) и се използва �
 backend-а, така и от тестовете.
 """
 
+import math
+
 from . import aero
 from . import airfoils
 from . import cg
@@ -16,7 +18,16 @@ from . import settings as app_settings
 from . import structure
 from . import weight
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+
+# Колко от общата маса може да е печатаната конструкция, за да има смисъл
+# дизайнът. Над това масовият бюджет математически още има корен, но
+# резултатът е безсмислен (напр. 8 kg „треньор“).
+MAX_AIRFRAME_SHARE = 0.60
+MAX_PAYLOAD_G = 50000.0        # горна граница за вход, за да няма абсурдни модели
+MAX_COMPONENT_QTY = 1000.0
+MAX_COMPONENT_MASS_G = 50000.0
+MAX_MANUAL_X_MM = 20000.0
 
 
 def default_inputs():
@@ -82,9 +93,12 @@ def _num(value, default=None):
     if value is None or value == "":
         return default
     try:
-        return float(str(value).replace(",", "."))
+        number = float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(number):
+        return default
+    return number
 
 
 def _merge(dst, src):
@@ -119,15 +133,21 @@ def normalize(inputs):
             "id": comp.get("id") or "c%d" % i,
             "name": comp.get("name") or weight.CATEGORIES.get(cat, "Друго"),
             "category": cat if cat in weight.CATEGORIES else "other",
-            "qty": max(0.0, _num(comp.get("qty"), 1.0)),
-            "unit_mass_g": max(0.0, _num(comp.get("unit_mass_g"), 0.0)),
-            "x_mm": _num(comp.get("x_mm"), None),
+            "qty": min(MAX_COMPONENT_QTY,
+                       max(0.0, _num(comp.get("qty"), 1.0))),
+            "unit_mass_g": min(MAX_COMPONENT_MASS_G,
+                               max(0.0, _num(comp.get("unit_mass_g"), 0.0))),
+            "x_mm": (None if _num(comp.get("x_mm"), None) is None else
+                     min(MAX_MANUAL_X_MM,
+                         max(0.0, _num(comp.get("x_mm"), 0.0)))),
+            "estimated": bool(comp.get("estimated", False)),
             "note": comp.get("note", ""),
         })
 
     bed = merged["print"].get("bed") or list(printcost.DEFAULT_BED)
     try:
-        bed = [max(50.0, float(b)) for b in list(bed)[:3]]
+        bed = [presets.clamp(_num(b, 220.0), 50.0, 2000.0)
+               for b in list(bed)[:3]]
     except (TypeError, ValueError):
         bed = list(printcost.DEFAULT_BED)
     while len(bed) < 3:
@@ -145,8 +165,9 @@ def normalize(inputs):
         "payload": {
             "mode": ("components" if payload.get("mode") == "components"
                      else "simple"),
-            "total_g": max(0.0, _num(payload.get("total_g"),
-                                     base["payload"]["total_g"])),
+            "total_g": min(MAX_PAYLOAD_G,
+                           max(0.0, _num(payload.get("total_g"),
+                                         base["payload"]["total_g"]))),
             "components": components,
         },
         "wing": {
@@ -168,11 +189,15 @@ def normalize(inputs):
         "propulsion": {
             "cells": int(presets.clamp(
                 _num(prop.get("cells"), 3), 1, 14)),
-            "capacity_mah": _num(prop.get("capacity_mah")),
-            "endurance_min": _num(prop.get("endurance_min"), 8.0),
+            "capacity_mah": (
+                None if _num(prop.get("capacity_mah")) is None else
+                min(100000.0, max(0.0, _num(prop.get("capacity_mah"))))),
+            "endurance_min": min(
+                240.0, max(1.0, _num(prop.get("endurance_min"), 8.0))),
             "thrust_to_weight": _num(prop.get("thrust_to_weight")),
             "power_to_weight": _num(prop.get("power_to_weight")),
-            "prop_d_in": _num(prop.get("prop_d_in")),
+            "prop_d_in": (None if _num(prop.get("prop_d_in")) is None else
+                          presets.clamp(_num(prop.get("prop_d_in")), 5.0, 24.0)),
         },
         "print": {
             "filament": prt.get("filament") or materials.DEFAULT_FILAMENT,
@@ -218,6 +243,8 @@ def resolve(inp):
         "filament": filament,
         "airfoil": airfoils.get(airfoil_key),
         "airfoil_key": airfoil_key,
+        "cd0_used": aero.cd0_for_airfoil(mission["cd0"],
+                                         airfoils.get(airfoil_key)),
         "tail_airfoil": (inp["tail"].get("airfoil")
                          or airfoils.DEFAULT_TAIL_AIRFOIL),
         "wing_loading": presets.clamp(wing_loading, 10.0, 250.0),
@@ -225,20 +252,25 @@ def resolve(inp):
             inp["wing"]["aspect_ratio"] or mission["aspect_ratio"], 3.0, 16.0),
         "taper": presets.clamp(
             inp["wing"]["taper"] or mission["taper"], 0.25, 1.0),
-        "dihedral_deg": (inp["wing"]["dihedral_deg"]
-                         if inp["wing"]["dihedral_deg"] is not None
-                         else mission["dihedral_deg"]),
+        "dihedral_deg": presets.clamp(
+            (inp["wing"]["dihedral_deg"]
+             if inp["wing"]["dihedral_deg"] is not None
+             else mission["dihedral_deg"]), -10.0, 20.0),
         "wing_le_ratio": presets.clamp(inp["wing"]["wing_le_ratio"], 0.10, 0.60),
-        "vh": (inp["tail"]["vh"] if inp["tail"]["vh"] is not None
-               else mission["vh"]),
-        "vv": (inp["tail"]["vv"] if inp["tail"]["vv"] is not None
-               else mission["vv"]),
-        "tail_arm_ratio": (inp["tail"]["tail_arm_ratio"]
-                           if inp["tail"]["tail_arm_ratio"] is not None
-                           else mission["tail_arm_ratio"]),
-        "static_margin": (inp["tail"]["static_margin"]
-                          if inp["tail"]["static_margin"] is not None
-                          else mission["static_margin"]),
+        "vh": presets.clamp(
+            (inp["tail"]["vh"] if inp["tail"]["vh"] is not None
+             else mission["vh"]), 0.0, 1.2),
+        "vv": presets.clamp(
+            (inp["tail"]["vv"] if inp["tail"]["vv"] is not None
+             else mission["vv"]), 0.0, 0.15),
+        "tail_arm_ratio": presets.clamp(
+            (inp["tail"]["tail_arm_ratio"]
+             if inp["tail"]["tail_arm_ratio"] is not None
+             else mission["tail_arm_ratio"]), 0.20, 0.95),
+        "static_margin": presets.clamp(
+            (inp["tail"]["static_margin"]
+             if inp["tail"]["static_margin"] is not None
+             else mission["static_margin"]), 0.0, 0.30),
         "tail_type": inp["tail"].get("type") or "conventional",
         "cells": inp["propulsion"]["cells"],
         "capacity_mah": inp["propulsion"]["capacity_mah"],
@@ -316,6 +348,13 @@ def compute(inputs):
     user_components = [weight.normalize_component(c, 0.0, i)
                        for i, c in enumerate(inp["payload"]["components"])]
     payload_known = weight.components_total_g(user_components)
+    battery_mass_provided_g = sum(
+        c["mass_g"] for c in user_components
+        if c.get("category") == "battery")
+    if mode == "simple":
+        # В simple режим компонентите са скрити/игнорирани; батерията е
+        # част от shadow-разпределението (42% от товара).
+        battery_mass_provided_g = 0.0
 
     if mode == "simple":
         payload_known = inp["payload"]["total_g"]
@@ -351,18 +390,31 @@ def compute(inputs):
             endurance_min=cfg["endurance_min"],
             thrust_to_weight=cfg["thrust_to_weight"],
             power_to_weight=cfg["power_to_weight"],
-            prop_d_in=cfg["prop_d_in"], cd0=mission["cd0"])
+            prop_d_in=cfg["prop_d_in"], cd0=cfg["cd0_used"],
+            battery_mass_g=(battery_mass_provided_g
+                            if battery_mass_provided_g > 0 else None))
+        if (mode == "components" and not cfg["capacity_mah"]
+                and battery_mass_provided_g > 0):
+            spec["battery"]["capacity_source"] = (
+                "от масата на батерията")
         est = ([] if mode == "simple"
                else propulsion.estimate_component_masses(spec, mission_key,
                                                          provided))
+        if mode == "simple":
+            # В simple режим батерията е част от зададения товар (42%),
+            # затова капацитетът идва от масата, а времето е следствие.
+            spec["battery"]["capacity_source"] = (
+                "от масата на батерията (42% от товара)")
         est_mass = weight.components_total_g(est)
         fus_len_m = aero.fuselage_length(geom["span_m"],
                                          mission["fuselage_ratio"])
         fus = weight.fuselage_dimensions(spec["battery"]["volume_cm3"],
                                          total_g / 1000.0, fus_len_m * 1000.0)
+        wing_le_m = cfg["wing_le_ratio"] * fus["length_mm"] / 1000.0
         tail = aero.tail_areas(area, geom["span_m"], geom["mac_m"],
                                fus["length_mm"] / 1000.0,
-                               cfg["tail_arm_ratio"], cfg["vh"], cfg["vv"])
+                               cfg["tail_arm_ratio"], cfg["vh"], cfg["vv"],
+                               wing_le_m=wing_le_m)
         parts = printcost.estimate_airframe(geom, tail, fus, print_cfg, fil)
         airframe = sum(p["mass_g"] for p in parts)
         return {
@@ -390,21 +442,27 @@ def compute(inputs):
         Намира общата маса чрез бисекция.
 
         Търсим корена на f(m) = товар + конструкция(m) + оборудване(m) − m.
-        Ако конструкцията расте по-бързо от масата (например PLA с много
-        периметри), решение НЯМА — връщаме feasible=False.
+
+        Ако конструкцията расте по-бързо от подемната сила (например PLA с
+        много периметри), корен НЯМА: връщаме едноитерационен дизайн
+        (m = товар + конструкция(товар)) с feasible=False, вместо безкрайно
+        растящо решение.
         """
-        lo = max(10.0, 0.25 * payload_known)
+        lo = max(10.0, payload_known)
         hi = max(200.0, 2.0 * payload_known + 300.0)
         evals = 0
 
         f_lo, st_lo = residual(lo, wing_loading)
         evals += 1
         if f_lo <= 0:
-            return lo, st_lo, True, evals
+            return lo, st_lo, True, evals, True
 
+        # Дизайн „с една итерация“ — това е реалистичното число, когато
+        # масовият бюджет не се събира.
+        one_shot_m = lo + f_lo
         f_hi, st_hi = residual(hi, wing_loading)
         evals += 1
-        max_hi = max(2000.0, 12.0 * payload_known)
+        max_hi = max(3000.0, 8.0 * one_shot_m)
         for _ in range(14):
             if f_hi <= 0 or hi >= max_hi:
                 break
@@ -413,44 +471,55 @@ def compute(inputs):
             f_hi, st_hi = residual(hi, wing_loading)
             evals += 1
         if f_hi > 0:
-            return hi, st_hi, False, evals
+            # Няма корен: конструкцията расте по-бързо от подемната сила.
+            # Връщаме едностъпкова оценка и честно converged=False.
+            return (one_shot_m, evaluate(one_shot_m, wing_loading),
+                    False, evals, False)
 
         for _ in range(48):
             mid = 0.5 * (lo + hi)
             f_mid, st_mid = residual(mid, wing_loading)
             evals += 1
             if abs(f_mid) < 0.2:
-                return mid, st_mid, True, evals
+                if st_mid["airframe_g"] > MAX_AIRFRAME_SHARE * mid:
+                    # Корен има, но конструкцията е над допустимия дял.
+                    return mid, st_mid, False, evals, True
+                return mid, st_mid, True, evals, True
             if f_mid > 0:
                 lo, f_lo, st_lo = mid, f_mid, st_mid
             else:
                 hi, f_hi, st_hi = mid, f_mid, st_mid
 
         mid = 0.5 * (lo + hi)
-        return mid, evaluate(mid, wing_loading), True, evals + 1
+        st = evaluate(mid, wing_loading)
+        ok = st["airframe_g"] <= MAX_AIRFRAME_SHARE * mid
+        return mid, st, ok, evals + 1, True
 
     requested_wl = cfg["wing_loading"]
     wl_used = requested_wl
-    total_g, state, feasible, iterations = solve(wl_used)
+    total_g, state, feasible, iterations, converged = solve(wl_used)
 
     if not feasible:
         # По-високо натоварване = по-малка площ на единица маса → по-малко
-        # конструкция. Опитваме нагоре, докато решението стане възможно.
-        for factor in (1.3, 1.7, 2.2, 2.8, 3.6, 4.5):
-            wl_try = min(150.0, requested_wl * factor)
+        # конструкция. Опитваме нагоре, но НЕ безкрайно: над 25% от исканото
+        # дизайнът вече не е този модел и се връща честно „невъзможно“.
+        wl_cap = min(150.0, requested_wl * 1.25)
+        for factor in (1.05, 1.12, 1.18, 1.25):
+            wl_try = min(wl_cap, requested_wl * factor)
             if wl_try <= wl_used:
                 continue
-            t_try, s_try, ok, ev = solve(wl_try)
+            t_try, s_try, ok, ev, conv = solve(wl_try)
             iterations += ev
+            converged = conv
+            wl_used = wl_try
             if ok:
-                wl_used = wl_try
                 total_g, state, feasible = t_try, s_try, True
                 break
-            wl_used = wl_try
+            total_g, state = t_try, s_try
 
     cfg["wing_loading_requested"] = requested_wl
     cfg["wing_loading_used"] = wl_used
-    converged = feasible
+    cfg["wing_loading_escalated"] = wl_used > requested_wl + 0.5
 
     return build_result(inp, cfg, state, user_components, mode, iterations,
                         converged, print_cfg, feasible)
@@ -476,8 +545,11 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
     fus_len_mm = fus["length_mm"]
 
     if mode == "simple":
-        base_components = list(inp["payload"]["components"]) + \
-            _shadow_components(inp["payload"]["total_g"])
+        # В simple режим списъкът с компоненти е скрит в UI, но може да
+        # е останал от предишен режим. Той НЕ бива да се добавя към
+        # shadow-разпределението — иначе масата се брои двойно и геометрията
+        # (оразмерена само по total_g) престава да отговаря на масата.
+        base_components = _shadow_components(inp["payload"]["total_g"])
     else:
         base_components = list(inp["payload"]["components"]) + state["est"]
     components = [weight.normalize_component(c, fus_len_mm, i)
@@ -486,10 +558,26 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
     payload_g = weight.components_total_g(components)
     airframe_g = state["airframe_g"]
     total_g = payload_g + airframe_g
+    # Масата, за която реално са оразмерени крилото/опашката. При
+    # невъзможен масов бюджет тя се разминава с товар+конструкция; това
+    # трябва да се вижда явно, а не да се представя за валиден дизайн.
+    geometry_total_g = float(state.get("total_g", total_g))
+    budget_gap_g = total_g - geometry_total_g
+    budget_closed = abs(budget_gap_g) <= 0.5
     wing_le_mm = cfg["wing_le_ratio"] * fus_len_mm
 
     cg_res = cg.analyse(components, airframe_g, fus_len_mm, wing_le_mm,
-                        geom["mac_mm"], cfg["static_margin"], cfg["has_tail"])
+                        geom["mac_mm"], cfg["static_margin"], cfg["has_tail"],
+                        cfg["vh"])
+
+    # BOM/отчетът трябва да показват РЕАЛНАТА позиция на батерията, а не
+    # само позицията по подразбиране. Оригиналът x_mm се пази (за
+    # сравнение/тестове), а x_placed_mm е балансираната стойност.
+    placed_battery_x = cg_res.get("battery_x_placed_mm")
+    if placed_battery_x is not None:
+        for c in components:
+            if c.get("category") == "battery":
+                c["x_placed_mm"] = placed_battery_x
 
     # Ако батерията не може да балансира, търсим по-добра позиция на крилото
     wing_le_recommended = wing_le_mm
@@ -502,7 +590,7 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
             wl_mm = ratio * fus_len_mm
             trial = cg.analyse(components, airframe_g, fus_len_mm, wl_mm,
                                geom["mac_mm"], cfg["static_margin"],
-                               cfg["has_tail"])
+                               cfg["has_tail"], cfg["vh"])
             xb = trial.get("battery_x_required_mm")
             if xb is None:
                 continue
@@ -519,14 +607,17 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
         perimeters=cfg["perimeters"], nozzle=cfg["nozzle"])
 
     ld_max, cl_opt = aero.best_ld(geom["aspect_ratio"], mission["oswald"],
-                                  mission["cd0"])
+                                  cfg["cd0_used"])
+    # Скоростта при максимално качество (за реален деградиент/скорост на
+    # снижаване), а не крейсерската — иначе сензорът е +20–30% погрешен.
+    v_best_ld = aero.speed_for_cl(total_g / 1000.0, geom["area_m2"], cl_opt)
     re_cruise = aero.reynolds(state["v_cruise"], geom["mac_m"])
     wing_loading = aero.wing_loading_g_dm2(total_g, geom["area_m2"])
     summary = printcost.summarize(parts)
 
     curves = aero.speed_sweep(
         total_g / 1000.0, geom["area_m2"], geom["aspect_ratio"],
-        mission["oswald"], mission["cd0"],
+        mission["oswald"], cfg["cd0_used"],
         0.8 * stall["v_stall_ms"], 2.2 * state["v_cruise"], 18,
         propulsion.ETA_PROP, p_shaft_available=spec["p_max_shaft_w"] * 0.85,
         cl_max=stall["cl_max"])
@@ -548,12 +639,30 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
                           total_g, airframe_g, payload_g, wing_loading,
                           re_cruise, converged, fus, tail, feasible)
 
+    if not budget_closed:
+        checks.append(_check(
+            "error", "Масовият бюджет не се затваря",
+            "Геометрията е оразмерена за %.0f g, а товар + конструкция = "
+            "%.0f g (разлика %.0f g). Дизайнът е невалиден: числата за "
+            "скорости/якост не отговарят на реалната маса."
+            % (geometry_total_g, total_g, budget_gap_g)))
+
     if abs(wing_le_recommended - wing_le_mm) > 5.0:
         checks.insert(0, _check(
-            "info", "По-добра позиция на крилото",
+            "warn" if not cg_res.get("cg_achievable", True) else "info",
+            "По-добра позиция на крилото",
             "Постави водещия ръб на крилото на %.0f mm от носа (сега е на "
             "%.0f mm) — така батерията пада на удобно място за баланс."
             % (wing_le_recommended, wing_le_mm)))
+
+    # ready_to_fly е обобщен флаг: не само ЦТ, а и масовият бюджет,
+    # якостта/деформацията и всички error-проверки.
+    error_checks = [c for c in checks if c["level"] == "error"]
+    cg_res["cg_ready"] = bool(cg_res.get("battery_feasible")
+                              and cg_res.get("cg_achievable"))
+    cg_res["blocking_checks"] = [c["title"] for c in error_checks]
+    cg_res["ready_to_fly"] = bool(feasible and cg_res["cg_ready"]
+                                  and not error_checks)
 
     return {
         "ok": True,
@@ -568,7 +677,12 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
         "filament": {
             "key": fil["key"],
             "name": fil["name"],
+            "density": fil["density"],
             "printed_density": fil["printed_density"],
+            "tensile_mpa": fil["tensile_mpa"],
+            "e_mpa": fil["e_mpa"],
+            "layer_factor": fil["layer_factor"],
+            "max_flow": fil["max_flow"],
             "price_per_kg": fil["price_per_kg"],
             "notes": fil["notes"],
         },
@@ -576,7 +690,12 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
             "wing_loading": cfg.get("wing_loading_used", cfg["wing_loading"]),
             "wing_loading_requested": cfg.get("wing_loading_requested",
                                               cfg["wing_loading"]),
+            "wing_loading_escalated": bool(
+                cfg.get("wing_loading_escalated", False)),
             "feasible": feasible,
+            "budget_closed": budget_closed,
+            "cd0": cfg["cd0_used"],
+            "cd_min_airfoil": cfg["airfoil"]["cd_min"],
             "aspect_ratio": cfg["aspect_ratio"],
             "taper": cfg["taper"],
             "dihedral_deg": cfg["dihedral_deg"],
@@ -604,6 +723,9 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
             "filament_comparison": filament_cmp,
             "iterations": iterations,
             "converged": converged,
+            "budget_closed": budget_closed,
+            "budget_gap_g": budget_gap_g,
+            "geometry_total_g": geometry_total_g,
             "mode": mode,
         },
         "geometry": {
@@ -627,6 +749,13 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
                 "s_v_dm2": tail["s_v_dm2"],
                 "l_h_mm": tail["l_h_mm"],
                 "l_v_mm": tail["l_v_mm"],
+                "l_h_configured_mm": tail.get("l_h_configured_mm",
+                                              tail["l_h_mm"]),
+                "l_eff_mm": tail.get("l_eff_mm", tail["l_h_mm"]),
+                "tail_fit_limited": bool(tail.get("tail_fit_limited", False)),
+                "tail_ac_mm": tail.get("tail_ac_mm", 0.0),
+                "c_h_mm": tail.get("c_h_mm", 0.0),
+                "c_v_mm": tail.get("c_v_mm", 0.0),
                 "vh": cfg["vh"],
                 "vv": cfg["vv"],
                 "s_h_ratio_pct": (100.0 * tail["s_h_m2"] / geom["area_m2"]
@@ -639,6 +768,7 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
                 "name": cfg["airfoil"]["name"],
                 "kind": cfg["airfoil"]["kind"],
                 "cl_max": cfg["airfoil"]["cl_max"],
+                "cd_min": cfg["airfoil"]["cd_min"],
                 "re_range": list(cfg["airfoil"]["re_range"]),
                 "use": cfg["airfoil"]["use"],
                 "has_coords": cfg["airfoil"]["has_coords"],
@@ -660,14 +790,16 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
             "re_stall": stall["re_stall"],
             "ld_max": ld_max,
             "cl_at_ld_max": cl_opt,
-            "cd0": mission["cd0"],
+            "cd0": cfg["cd0_used"],
+            "cd0_mission": mission["cd0"],
+            "cd_min_airfoil": cfg["airfoil"]["cd_min"],
             "oswald": mission["oswald"],
             "lift_slope_per_rad": aero.lift_slope(geom["aspect_ratio"],
                                                   mission["oswald"]),
             "power_required_w": spec["cruise"]["p_elec_w"],
             "glide_ratio": ld_max,
-            "sink_rate_ms": (state["v_cruise"] / ld_max
-                             if ld_max > 0 else 0.0),
+            "v_best_ld_ms": v_best_ld,
+            "sink_rate_ms": (v_best_ld / ld_max if ld_max > 0 else 0.0),
         },
         "propulsion": spec,
         "stability": cg_res,
@@ -692,33 +824,52 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
     total_kg = total_g / 1000.0
 
     # 1. Конвергенция на масовия бюджет
-    if converged:
+    if converged and feasible:
         checks.append(_check("ok", "Масовият бюджет е стабилен",
                              "Итерациите се събраха: конструкцията и "
                              "оборудването са в равновесие."))
+    elif converged:
+        checks.append(_check("info", "Масовият бюджет има решение",
+                             "Равновесието съществува, но дизайнът е "
+                             "недопустим по друга проверка (виж грешките)."))
     else:
-        checks.append(_check("warn", "Масовият бюджет не се стабилизира",
-                             "Достигнат е лимит на итерациите — стойностите "
-                             "са близо до решението, но не точно."))
+        checks.append(_check("error", "Няма решение на масовия бюджет",
+                             "Конструкцията расте по-бързо от подемната "
+                             "сила — решение не съществува. Това НЕ е "
+                             "изчерпан лимит на итерациите."))
 
     # 1б. Възможно ли е изобщо това тегло при този филамент
     wl_req = cfg.get("wing_loading_requested", cfg["wing_loading"])
     wl_use = cfg.get("wing_loading_used", wl_req)
     if not feasible:
-        checks.append(_check(
-            "error", "Конструкцията не може да носи себе си",
-            "При %.0f g/dm² и „%s“ печатната конструкция расте по-бързо от "
-            "подемната сила — решение не съществува. Смени на LW-PLA, "
-            "намали периметрите или намали натоварването на крилото."
-            % (wl_req, cfg["filament"]["name"])))
-    elif abs(wl_use - wl_req) > 0.5:
+        if converged:
+            detail = ("При %.0f g/dm² и „%s“ конструкцията заема над 60%% "
+                      "от общата маса — масовият бюджет има решение, но "
+                      "то е недопустимо. Смени на LW-PLA, намали "
+                      "периметрите или намали натоварването на крилото."
+                      % (wl_req, cfg["filament"]["name"]))
+        else:
+            detail = ("При %.0f g/dm² и „%s“ печатната конструкция расте "
+                      "по-бързо от подемната сила — решение не съществува "
+                      "(пробвано до %.0f g/dm²). Смени на LW-PLA, намали "
+                      "периметрите или намали натоварването на крилото."
+                      % (wl_req, cfg["filament"]["name"], wl_use))
+        checks.append(_check("error",
+                             "Конструкцията не може да носи себе си",
+                             detail))
+    if abs(wl_use - wl_req) > 0.5:
         checks.append(_check(
             "warn", "Натоварването на крилото е променено",
-            "При %.0f g/dm² конструкцията не се носи; използвани са "
-            "%.0f g/dm² (по-малка площ, по-висока скорост)." % (wl_req, wl_use)))
+            "При %.0f g/dm² конструкцията не се носи; целеви са %.0f g/dm², "
+            "а реалното натоварване е %.1f g/dm²."
+            % (wl_req, wl_use, wing_loading)))
 
     # 2. Натоварване на крилото
     lo, hi = mission["wing_loading_range"]
+    if payload_g <= 0:
+        checks.append(_check("warn", "Няма зададен товар",
+                             "Общото тегло е 0 g — моделът е изчислен само "
+                             "от конструкцията. Задай масата на оборудването."))
     if lo <= wing_loading <= hi:
         checks.append(_check("ok", "Натоварване на крилото",
                              "%.1f g/dm² — в диапазона %.0f–%.0f g/dm² за "
@@ -763,13 +914,34 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                              "Re = %.0f — профилът работи в добрия си режим."
                              % re_cruise))
 
-    # 5. Тяга
+    re_lo, re_hi = cfg["airfoil"].get("re_range", (0.0, 0.0))
+    if re_lo and re_cruise < re_lo * 0.8:
+        checks.append(_check(
+            "warn", "Re под диапазона на профила",
+            "Re = %.0f, а %s работи добре от ~%.0f. Избери по-дебел профил "
+            "или по-голям хорд."
+            % (re_cruise, cfg["airfoil"]["name"], re_lo)))
+    elif re_hi and re_cruise > re_hi * 1.2:
+        checks.append(_check(
+            "warn", "Re над диапазона на профила",
+            "Re = %.0f, а %s е предвиден до ~%.0f."
+            % (re_cruise, cfg["airfoil"]["name"], re_hi)))
+
+    # 5. Тяга — сравнява се с тягата при ПРЕПОРЪЧАНАТА мощност (иначе
+    # проверката е тавтологична: мощността се вдига точно до целта).
     tw_t = spec["thrust_to_weight_target"]
     tw_a = spec["thrust_to_weight_actual"]
-    if tw_a < 0.9 * tw_t:
-        checks.append(_check("warn", "Недостатъчна тяга",
-                             "%.2f : 1 при цел %.2f : 1. Увеличи мощността "
-                             "или диаметъра на витлото." % (tw_a, tw_t)))
+    tw_rec = spec.get("thrust_to_weight_at_recommended", tw_a)
+    if tw_rec < 0.9 * tw_t:
+        checks.append(_check(
+            "warn", "Тягата изисква повече мощност от препоръчаната",
+            "При препоръчаните %.0f W/kg тягата е %.2f : 1 (цел %.2f : 1); "
+            "мощността е вдигната до %.0f W (%.0f W/kg). Провери дали "
+            "моторът/ESC издържат, или сложи по-голямо витло (%d\" сега)."
+            % (spec["power_to_weight"], tw_rec, tw_t,
+               spec["p_max_elec_w"],
+               spec["p_max_elec_w"] / total_kg if total_kg > 0 else 0.0,
+               spec["prop_d_in"])))
     else:
         checks.append(_check("ok", "Тяга",
                              "%.2f : 1 (цел %.2f : 1) при %d W и витло "
@@ -779,27 +951,52 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
 
     # 6. Мощност
     p2w_act = spec["p_max_elec_w"] / total_kg if total_kg > 0 else 0.0
-    if p2w_act < 0.85 * spec["power_to_weight"]:
-        checks.append(_check("warn", "Ниска мощност за типа",
-                             "%.0f W/kg при препоръчани %.0f W/kg."
+    if p2w_act > 1.6 * spec["power_to_weight"]:
+        checks.append(_check("warn", "Много висока мощност за типа",
+                             "%.0f W/kg при препоръчани %.0f W/kg — тежък "
+                             "мотор/батерия и къс полет."
                              % (p2w_act, spec["power_to_weight"])))
     else:
         checks.append(_check("ok", "Мощност",
                              "%.0f W/kg, макс. ток %.1f A (ESC %d A)."
                              % (p2w_act, spec["i_max_a"], spec["esc_a"])))
 
-    # 7. Витло спрямо размаха
+    # 7. Витло спрямо размаха и мощността
     prop_mm = spec["prop_d_in"] * 25.4
     if prop_mm > 0.32 * geom["span_mm"]:
         checks.append(_check("warn", "Голямо витло за размаха",
                              "%d инча (%.0f mm) при размах %.0f mm — провери "
                              "клиренса и реактивния момент."
                              % (spec["prop_d_in"], prop_mm, geom["span_mm"])))
+    if spec.get("rpm_conflict"):
+        reasons = []
+        if spec.get("rpm_pitch_over_tip"):
+            reasons.append("стъпката иска %.0f об/мин, над лимита %.0f"
+                           % (spec["rpm_min"], spec["rpm_tip"]))
+        if spec.get("rpm_power_over_tip"):
+            reasons.append("мощността иска %.0f об/мин, над лимита %.0f"
+                           % (spec["rpm_power"], spec["rpm_tip"]))
+        if spec.get("rpm_power_below_pitch"):
+            reasons.append("при тази мощност витлото достига %.0f об/мин, "
+                           "а за крейсерската стъпка са нужни %.0f"
+                           % (spec["rpm_power"], spec["rpm_min"]))
+        if spec.get("rpm_capped"):
+            reasons.append("оборотите са ограничени до %.0f, за да не се "
+                           "надхвърли върховата скорост при пълна батерия"
+                           % spec["rpm_target"])
+        checks.append(_check(
+            "warn", "Витлото не е съгласувано с мощността",
+            "%d×%d инча: %s. Сложи витло с по-малка стъпка/диаметър или "
+            "промени мощността и клетките."
+            % (spec["prop_d_in"], spec["prop_pitch_in"],
+               "; ".join(reasons) or "оборотите са извън разумния режим")))
     else:
         checks.append(_check("info", "Витло",
-                             "%d×%d инча, ~%.0f об/мин, Kv ≈ %.0f."
+                             "%d×%d инча, ~%.0f об/мин (J ≈ %.2f), Kv ≈ %.0f."
                              % (spec["prop_d_in"], spec["prop_pitch_in"],
-                                spec["rpm_target"], spec["kv"])))
+                                spec["rpm_target"],
+                                spec.get("advance_ratio_cruise", 0.0),
+                                spec["kv"])))
 
     # 8. Батерия — ток и време
     c_needed = spec["battery"]["c_rating_needed"]
@@ -816,12 +1013,32 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                              "Нужни са %.0fC; стандартен 30–45C пакет е "
                              "достатъчен." % c_needed))
 
+    if spec.get("esc_saturated"):
+        checks.append(_check(
+            "error", "ESC над стандартния размер",
+            "Нужни са %.0f A (1.25×%.1f A), а най-големият стандартен ESC "
+            "е %d A. Раздели задвижването, вдигни клетките или намали "
+            "мощността."
+            % (spec["esc_required_a"], spec["i_max_a"],
+               presets.ESC_SIZES_A[-1])))
+
     end_act = spec["battery"]["endurance_min"]
     end_tgt = spec["battery"]["endurance_target_min"]
     if end_act < 0.8 * end_tgt:
         checks.append(_check("warn", "По-малко време от желаното",
                              "%.0f мин при цел %.0f мин — батерията е "
                              "ограничена от теглото." % (end_act, end_tgt)))
+    elif end_act > 1.5 * end_tgt:
+        cap_for_target = (spec["battery"]["capacity_mah"] * end_tgt / end_act
+                          if end_act > 0 else spec["battery"]["capacity_mah"])
+        checks.append(_check(
+            "info", "По-голяма батерия от нужното",
+            "%.0f мин при цел %.0f мин — за целта стигат ~%.0f mAh "
+            "(~%.0f g по-малко тегло)." % (
+                end_act, end_tgt, cap_for_target,
+                max(0.0, spec["battery"]["mass_g"]
+                    - spec["battery"]["energy_wh"] * end_tgt / end_act
+                    / presets.BATTERY_SPECIFIC_ENERGY_WH_KG * 1000.0))))
     else:
         checks.append(_check("ok", "Време на полет",
                              "~%.0f мин в крейсер (%d mAh, %dS)."
@@ -833,7 +1050,7 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
     sm = cg_res["static_margin_actual"]
     if sm < 0.02:
         checks.append(_check("error", "Опасен център на тежестта",
-                             "ЦТ е на %.1f%% MAC — зад аеродинамичния център. "
+                             "ЦТ е на %.1f%% MAC — зад неутралната точка. "
                              "Моделът ще е нестабилен; премести маса напред."
                              % cg_res["cg_pct_mac"]))
     elif sm < 0.05:
@@ -842,17 +1059,31 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                              % (sm * 100.0)))
     elif sm <= 0.16:
         checks.append(_check("ok", "Статичен запас",
-                             "%.0f%% MAC (цел %.0f%%), ЦТ на %.1f%% MAC."
+                             "%.0f%% MAC (цел %.0f%%), ЦТ на %.1f%% MAC "
+                             "(неутрална точка %.0f mm)."
                              % (sm * 100.0,
                                 cg_res["static_margin_target"] * 100.0,
-                                cg_res["cg_pct_mac"])))
+                                cg_res["cg_pct_mac"],
+                                cg_res.get("x_np_mm", 0.0))))
     else:
         checks.append(_check("warn", "Голям статичен запас",
                              "%.0f%% MAC — носът е тежък, моделът ще иска "
                              "много тример." % (sm * 100.0)))
 
+    if cg_res.get("battery_x_required_mm") is not None \
+            and not cg_res.get("cg_achievable", True):
+        checks.append(_check(
+            "error", "Целевият ЦТ не е постижим",
+            "Реалният ЦТ е %.0f mm (%.1f%% MAC) — статичният запас е %.0f%% "
+            "вместо целевите %.0f%%. Числата в отчета са за РЕАЛНИЯ ЦТ, не "
+            "за целевия."
+            % (cg_res["x_cg_mm"], cg_res["cg_pct_mac"],
+               cg_res["static_margin_actual"] * 100.0,
+               cg_res["static_margin_target"] * 100.0)))
+
     shift = cg_res["battery_shift_mm"]
     x_bat = cg_res.get("battery_x_required_mm")
+    x_placed = cg_res.get("battery_x_placed_mm", x_bat)
     if x_bat is None:
         checks.append(_check("warn", "Няма батерия в списъка",
                              "Добави батерия, за да може ЦТ да се балансира."))
@@ -860,30 +1091,31 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
         if x_bat < 0:
             checks.append(_check(
                 "error", "Моделът излиза тежък на опашка",
-                "Дори батерия в самото начало на носа не стига за целта — "
-                "конструкцията отзад е твърде тежка. Намали масата на "
-                "опашката (LW-PLA, по-малко периметри) или премести сервата "
-                "напред."))
+                "Дори батерия в самото начало на носа не стига за целта "
+                "(нужни са %.0f mm пред носа). Конструкцията отзад е твърде "
+                "тежка — намали масата на опашката (LW-PLA, по-малко "
+                "периметри) или премести сервата напред." % abs(x_bat)))
         else:
             checks.append(_check(
                 "error", "Батерията не може да балансира модела",
                 "Тя трябва да е на %.0f mm от носа — извън фюзелажа "
-                "(дължина %.0f mm). Премести компонентите."
-                % (x_bat, fus["length_mm"])))
+                "(дължина %.0f mm). Преместена е на %.0f mm; ЦТ е %.1f%% MAC."
+                % (x_bat, fus["length_mm"], x_placed,
+                   cg_res["cg_pct_mac"])))
     elif abs(shift) <= 25:
         checks.append(_check("ok", "Баланс с батерията",
                              "Батерията на ~%.0f mm от носа е на добро място."
-                             % x_bat))
+                             % x_placed))
     elif abs(shift) <= 60:
         checks.append(_check("warn", "Ще трябва разместване",
                              "Постави батерията на %.0f mm от носа "
                              "(по подразбиране %.0f mm)."
-                             % (x_bat, cg_res["battery_x_default_mm"])))
+                             % (x_placed, cg_res["battery_x_default_mm"])))
     else:
         checks.append(_check("warn", "Голямо разместване на батерията",
                              "Постави батерията на %.0f mm от носа "
                              "(по подразбиране %.0f mm, отместване %.0f mm)."
-                             % (x_bat, cg_res["battery_x_default_mm"],
+                             % (x_placed, cg_res["battery_x_default_mm"],
                                 abs(shift))))
 
     # 10. Маса на конструкцията
@@ -913,6 +1145,16 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                                 st["carbon"]["width_mm"],
                                 st["carbon"]["thickness_mm"],
                                 st["carbon"]["count"])))
+    elif st.get("carbon_for_stiffness"):
+        checks.append(_check(
+            "warn", "Нужен е карбон за коравина",
+            "Якостта стига (%.1f mm² от %.1f mm²), но само печатаният капс "
+            "се огъва %.0f mm при лимит %.0f mm. С включения карбон "
+            "%.0f×%.1f mm × %d деформацията е %.1f mm."
+            % (st["cap_area_req_mm2"], st["cap_area_print_mm2"],
+               st["deflection_print_mm"], st["deflection_limit_mm"],
+               st["carbon"]["width_mm"], st["carbon"]["thickness_mm"],
+               st["carbon"]["count"], st["deflection_carbon_mm"])))
     else:
         checks.append(_check("ok", "Спарове",
                              "Печатани капси: %.1f mm² при нужни %.1f mm² "
@@ -934,6 +1176,14 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                              % (defl, st["deflection_limit_mm"])))
 
     # 12. Печат
+    for problem in printcost.fit_problems(geom, tail, fus, cfg):
+        checks.append(_check("error", "Печат: частта не се побира", problem))
+    if cfg.get("infill", 0) > 40:
+        checks.append(_check(
+            "warn", "Висок infill",
+            "Моделът за печат е калибриран за тънкостенни крила (0–25% "
+            "infill). При %d%% масата/времето може да са подценени."
+            % round(cfg["infill"])))
     total_h = summary["time_h"]
     if total_h > 40:
         checks.append(_check("warn", "Дълъг печат",
@@ -978,11 +1228,20 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
         s_h_ratio = (100.0 * tail["s_h_m2"] / geom["area_m2"]
                      if geom["area_m2"] > 0 else 0.0)
         if 0.35 <= cfg["vh"] <= 0.80:
-            checks.append(_check("ok", "Хоризонтална опашка",
-                                 "S_h = %.0f cm² (%.0f%% от крилото), "
-                                 "V_h = %.2f, рамо %.0f mm."
-                                 % (tail["s_h_dm2"] * 100.0, s_h_ratio,
-                                    cfg["vh"], tail["l_h_mm"])))
+            if tail.get("tail_fit_limited"):
+                checks.append(_check(
+                    "ok", "Хоризонтална опашка",
+                    "S_h = %.0f cm² (%.0f%% от крилото), V_h = %.2f, рамо "
+                    "%.0f mm (конфиг. %.0f — ограничено от фюзелажа)."
+                    % (tail["s_h_dm2"] * 100.0, s_h_ratio, cfg["vh"],
+                       tail["l_h_mm"], tail.get("l_h_configured_mm",
+                                                tail["l_h_mm"]))))
+            else:
+                checks.append(_check("ok", "Хоризонтална опашка",
+                                     "S_h = %.0f cm² (%.0f%% от крилото), "
+                                     "V_h = %.2f, рамо %.0f mm."
+                                     % (tail["s_h_dm2"] * 100.0, s_h_ratio,
+                                        cfg["vh"], tail["l_h_mm"])))
         else:
             checks.append(_check("warn", "Нестандартен V_h",
                                  "V_h = %.2f (нормално 0.35–0.80)."
@@ -996,6 +1255,15 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
             checks.append(_check("warn", "Нестандартен V_v",
                                  "V_v = %.3f (нормално 0.015–0.060)."
                                  % cfg["vv"]))
+        if tail.get("tail_fit_limited"):
+            checks.append(_check(
+                "info", "Опашката е ограничена от фюзелажа",
+                "Конфигурираното рамо %.0f mm не се побира; използвано е "
+                "%.0f mm. S_h/S_v са увеличени до %.1f/%.1f dm², за да "
+                "запазят V_h/V_v. Ако това не е желано, удължи фюзелажа или "
+                "намали tail_arm_ratio."
+                % (tail.get("l_h_configured_mm", tail["l_h_mm"]),
+                   tail["l_h_mm"], tail["s_h_dm2"], tail["s_v_dm2"])))
     else:
         checks.append(_check("info", "Крило без опашка",
                              "Elevoni управляват наклон и тангаж; "

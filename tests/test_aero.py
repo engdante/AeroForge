@@ -9,7 +9,7 @@ import unittest
 
 import _env  # noqa: F401  (sys.path + изолирани настройки)
 
-from core import aero  # noqa: E402
+from core import aero, airfoils  # noqa: E402
 
 
 class TestWingGeometry(unittest.TestCase):
@@ -112,14 +112,34 @@ class TestTail(unittest.TestCase):
         # S_h = V_h·S·MAC / l_h
         self.assertAlmostEqual(res["s_h_m2"], 0.5 * 0.30 * 0.20 / (0.6 * 0.9),
                                places=9)
-        # S_v = V_v·S·b / l_v   (l_v = 0.92·L)
+        # S_v = V_v·S·b / l_v, като l_v = l_h (едно и също рамо)
         self.assertAlmostEqual(res["s_v_m2"],
-                               0.04 * 0.30 * 1.2 / (0.92 * 0.9), places=9)
+                               0.04 * 0.30 * 1.2 / (0.6 * 0.9), places=9)
+
+    def test_both_tails_use_the_same_arm(self):
+        res = aero.tail_areas(0.30, 1.2, 0.20, 0.9, 0.6, 0.5, 0.04)
+        self.assertAlmostEqual(res["l_h_mm"], res["l_v_mm"], places=9)
 
     def test_flying_wing_has_no_tail(self):
         res = aero.tail_areas(0.30, 1.2, 0.20, 0.9, 0.6, 0.0, 0.0)
         self.assertEqual(res["s_h_m2"], 0.0)
         self.assertEqual(res["s_v_m2"], 0.0)
+
+
+class TestStallConvergence(unittest.TestCase):
+    def test_clmax_decreases_at_low_re(self):
+        res = aero.stall_analysis(1.2, 0.15, 0.15, 1.4)
+        self.assertLess(res["cl_max"], 1.4)
+        # след итерацията Re на загуба съответства на върнатия CL
+        self.assertAlmostEqual(
+            airfoils.clmax_at_re(1.4, res["re_stall"]), res["cl_max"],
+            delta=0.01)
+
+    def test_speed_for_cl_roundtrip(self):
+        v = aero.speed_for_cl(1.2, 0.30, 0.7)
+        self.assertAlmostEqual(aero.lift_coefficient(1.2, 0.30, v), 0.7,
+                               places=9)
+        self.assertEqual(aero.speed_for_cl(1.2, 0.0, 0.7), 0.0)
 
 
 if __name__ == "__main__":

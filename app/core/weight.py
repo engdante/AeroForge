@@ -4,6 +4,10 @@ weight.py — компоненти, масов бюджет и разпреде�
 
 import math
 
+MAX_COMPONENT_QTY = 1000.0
+MAX_COMPONENT_MASS_G = 50000.0
+MAX_MANUAL_X_MM = 20000.0
+
 CATEGORIES = {
     "motor": "Мотор",
     "esc": "ESC",
@@ -39,9 +43,12 @@ def _num(value, default=0.0):
     if value is None or value == "":
         return default
     try:
-        return float(str(value).replace(",", "."))
+        number = float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(number):
+        return default
+    return number
 
 
 def normalize_component(comp, fus_len_mm=0.0, index=0):
@@ -54,15 +61,16 @@ def normalize_component(comp, fus_len_mm=0.0, index=0):
     category = comp.get("category") or "other"
     if category not in CATEGORIES:
         category = "other"
-    qty = max(1.0, _num(comp.get("qty"), 1.0))
-    unit = max(0.0, _num(comp.get("unit_mass_g"), 0.0))
+    qty = min(MAX_COMPONENT_QTY, max(1.0, _num(comp.get("qty"), 1.0)))
+    unit = min(MAX_COMPONENT_MASS_G,
+               max(0.0, _num(comp.get("unit_mass_g"), 0.0)))
     x_raw = comp.get("x_mm")
     if x_raw is None or x_raw == "":
         frac = DEFAULT_X_FRACTION.get(category, 0.40)
         x_mm = frac * fus_len_mm
         auto_x = True
     else:
-        x_mm = _num(x_raw, 0.0)
+        x_mm = min(MAX_MANUAL_X_MM, max(0.0, _num(x_raw, 0.0)))
         auto_x = False
     return {
         "id": comp.get("id") or "c%d" % index,
@@ -91,8 +99,17 @@ def components_total_g(components):
 
 
 def provided_categories(components):
-    """Кои категории потребителят вече е задал (за да не се оценяват)."""
-    return set(c["category"] for c in components if not c.get("estimated"))
+    """
+    Кои категории вече имат зададена/оценена маса.
+
+    Включва и компонентите с estimated=True: ако един дизайн бъде зареден
+    отново, старите оценки не бива да се дублират с нови. Празните
+    компоненти (0 g) не се броят за зададени.
+    """
+    return set(
+        c["category"] for c in components
+        if float(c.get("mass_g", 0.0) or 0.0) > 0.0
+        or float(c.get("unit_mass_g", 0.0) or 0.0) > 0.0)
 
 
 def airframe_items(airframe_g, fus_len_mm, wing_le_mm, mac_mm, has_tail=True):

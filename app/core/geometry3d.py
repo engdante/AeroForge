@@ -12,6 +12,7 @@ geometry3d.py — опростен 3D модел на проектирания �
 
 import math
 
+from . import aero
 from . import airfoils
 
 OUTLINE_POINTS = 8      # точки по горна/долна повърхност на сечението
@@ -238,13 +239,22 @@ def build_model(res, max_triangles=6000):
     s_v_mm2 = float(tail.get("s_v_dm2") or 0.0) * 10000.0
     tail_outline = _outline(g.get("tail_airfoil")
                             or airfoils.DEFAULT_TAIL_AIRFOIL)
+    tail_ac = float(tail.get("tail_ac_mm") or 0.0)
+    if tail_ac <= 0.0:
+        tail_ac = (wing_le + 0.25 * float(g["mac_mm"])
+                   + float(tail.get("l_h_mm") or 0.0))
 
     if s_h_mm2 > 100.0:
-        ar_h = 4.5
-        b_h = math.sqrt(ar_h * s_h_mm2)
-        taper_h = 0.6
-        c_h = 2.0 * s_h_mm2 / (b_h * (1.0 + taper_h))
-        x_h = max(wing_le + c_root, length - c_h - 0.03 * length)
+        taper_h = aero.TAIL_TAPER_H
+        c_h = float(tail.get("c_h_mm") or 0.0)
+        if c_h <= 0:
+            c_h = aero.tail_chord_m(s_h_mm2 / 1e6, aero.TAIL_AR_H,
+                                    taper_h) * 1000.0
+        b_h = 2.0 * s_h_mm2 / (c_h * (1.0 + taper_h)) if c_h > 0 else 0.0
+        # AC на опашката е на 25% от хордата; използва се същото рамо,
+        # с което е смятан статичният запас.
+        x_h = max(wing_le + c_root, tail_ac - 0.25 * c_h)
+        x_h = min(x_h, max(0.0, length - c_h))
         parts.append({
             "name": "Стабилизатор",
             "color": "#9fb0c6",
@@ -255,11 +265,14 @@ def build_model(res, max_triangles=6000):
         })
 
     if s_v_mm2 > 100.0:
-        ar_v = 1.4
-        b_v = math.sqrt(ar_v * s_v_mm2)
-        taper_v = 0.55
-        c_v = 2.0 * s_v_mm2 / (b_v * (1.0 + taper_v))
-        x_v = max(wing_le + c_root, length - c_v - 0.03 * length)
+        taper_v = aero.TAIL_TAPER_V
+        c_v = float(tail.get("c_v_mm") or 0.0)
+        if c_v <= 0:
+            c_v = aero.tail_chord_m(s_v_mm2 / 1e6, aero.TAIL_AR_V,
+                                    taper_v) * 1000.0
+        b_v = 2.0 * s_v_mm2 / (c_v * (1.0 + taper_v)) if c_v > 0 else 0.0
+        x_v = max(wing_le + c_root, tail_ac - 0.25 * c_v)
+        x_v = min(x_v, max(0.0, length - c_v))
         parts.append({
             "name": "Кил",
             "color": "#8fa2ba",

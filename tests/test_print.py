@@ -34,10 +34,12 @@ class TestGeometryOfPrint(unittest.TestCase):
         length = printcost.filament_length_m(100000.0 / 1.24, 1.0)
         self.assertAlmostEqual(length, 33.5, delta=0.6)
 
-    def test_lw_pla_consumes_more_filament(self):
+    def test_lw_pla_consumes_less_filament_per_volume(self):
+        """Разпенващият се филамент влага ПО-МАЛКО материал за същия обем."""
         vase = printcost.filament_length_m(1000.0, 1.0)
-        foaming = printcost.filament_length_m(1000.0, 1.55)
-        self.assertAlmostEqual(foaming / vase, 1.55, places=6)
+        foaming = printcost.filament_length_m(1000.0, 0.45 / 1.24)
+        self.assertLess(foaming, vase)
+        self.assertAlmostEqual(foaming / vase, 0.45 / 1.24, places=6)
 
 
 class TestPart(unittest.TestCase):
@@ -67,7 +69,28 @@ class TestPart(unittest.TestCase):
         a = printcost._make_part("a", 10000.0, 50.0, 1, self.cfg, self.pla)
         b = printcost._make_part("a", 10000.0, 50.0, 1, self.cfg, self.lw)
         self.assertLess(b["mass_g"], a["mass_g"])
-        self.assertGreater(b["filament_m"], a["filament_m"])
+        self.assertLess(b["filament_m"], a["filament_m"])
+
+    def test_filament_mass_equals_part_mass(self):
+        """Масата на детайла и дължината на филамента описват едно и също
+        количество материал — за ВСЕКИ филамент (иначе LW-PLA „яде“ 4×)."""
+        for key in materials.BUILTIN_FILAMENTS:
+            fil = materials.get(key)
+            part = printcost._make_part("тест", 20000.0, 60.0, 1, self.cfg,
+                                        fil)
+            spool_g = (part["filament_m"] * 1000.0
+                       * printcost.FILAMENT_AREA_MM2
+                       * fil["density"] / 1e6 * 1000.0)
+            self.assertAlmostEqual(spool_g, part["mass_g"],
+                                   delta=0.02 * part["mass_g"], msg=key)
+
+    def test_layer_overhead_per_piece(self):
+        one = printcost._make_part("a", 10000.0, 50.0, 1, self.cfg, self.pla)
+        two = printcost._make_part("a", 10000.0, 50.0, 2, self.cfg, self.pla)
+        # режийните на слой се плащат за всяка част: +250 слоя × 1.5 s
+        expected = (50.0 / 0.2) * printcost.LAYER_OVERHEAD_S / 3600.0
+        self.assertAlmostEqual(two["time_h"] - one["time_h"], expected,
+                               places=6)
 
     def test_time_and_cost_positive(self):
         part = printcost._make_part("тест", 50000.0, 200.0, 2, self.cfg,
@@ -126,6 +149,24 @@ class TestAirframeEstimate(unittest.TestCase):
         self.assertAlmostEqual(total["total_mass_g"], 15.0)
         self.assertAlmostEqual(total["time_h"], 1.5)
         self.assertEqual(total["pieces"], 3)
+
+
+class TestBedFit(unittest.TestCase):
+    def test_too_large_chord_is_reported(self):
+        from core import aero
+        geom = aero.wing_geometry(0.60, 4.5, 0.50)
+        fus = {"width_mm": 50.0, "height_mm": 62.0, "length_mm": 900.0}
+        cfg = {"bed": [220, 220, 250]}
+        problems = printcost.fit_problems(geom, {}, fus, cfg)
+        self.assertTrue(any("Кореновият хорд" in p for p in problems),
+                        problems)
+
+    def test_normal_trainer_fits(self):
+        from core import aero
+        geom = aero.wing_geometry(0.24, 7.0, 0.75)
+        fus = {"width_mm": 50.0, "height_mm": 62.0, "length_mm": 900.0}
+        cfg = {"bed": [220, 220, 250]}
+        self.assertEqual(printcost.fit_problems(geom, {}, fus, cfg), [])
 
 
 if __name__ == "__main__":

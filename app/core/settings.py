@@ -10,6 +10,7 @@ settings.py — потребителски настройки (settings.json).
 """
 
 import json
+import math
 import os
 import sys
 
@@ -91,9 +92,12 @@ def _num(value, default=None):
     if value is None or value == "":
         return default
     try:
-        return float(str(value).replace(",", "."))
+        number = float(str(value).replace(",", "."))
     except (TypeError, ValueError):
         return default
+    if not math.isfinite(number):
+        return default
+    return number
 
 
 def _merge_defaults(raw):

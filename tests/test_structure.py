@@ -59,6 +59,98 @@ class TestCarbonSelection(unittest.TestCase):
         self.assertGreaterEqual(carbon["area_mm2"], 1.4)
 
 
+class TestSafetyFactorAppliedOnce(unittest.TestCase):
+    def setUp(self):
+        self.geom = aero.wing_geometry(0.24, 7.0, 0.75)
+        self.mission = presets.mission("trainer")
+        self.lw = materials.get("lw_pla")
+
+    def _cap(self, sf):
+        return structure.analyse(0.773, self.geom, self.lw, self.mission,
+                                 "naca2412", safety_factor=sf)["cap_area_req_mm2"]
+
+    def test_cap_area_scales_linearly_with_sf(self):
+        """SF участва веднъж: A(2.0)/A(1.0) = 2, а не 4 (SF²)."""
+        self.assertAlmostEqual(self._cap(2.0) / self._cap(1.0), 2.0,
+                               places=6)
+        self.assertAlmostEqual(self._cap(3.0) / self._cap(1.0), 3.0,
+                               places=6)
+
+    def test_ultimate_moment_includes_sf(self):
+        st = structure.analyse(0.773, self.geom, self.lw, self.mission,
+                               "naca2412", safety_factor=1.5)
+        self.assertAlmostEqual(st["m_ult_nm"], st["m_root_nm"] * 1.5,
+                               places=6)
+        # допустимото напрежение е материална характеристика, без SF
+        self.assertAlmostEqual(st["sigma_allow_mpa"],
+                               self.lw["tensile_mpa"] * self.lw["layer_factor"],
+                               places=6)
+
+    def test_hand_calc_of_cap_area(self):
+        st = structure.analyse(0.773, self.geom, self.lw, self.mission,
+                               "naca2412", safety_factor=1.5)
+        expected = (st["m_ult_nm"] * 1000.0
+                    / (st["spar_height_mm"] * st["sigma_allow_mpa"]))
+        self.assertAlmostEqual(st["cap_area_req_mm2"], expected, places=9)
+
+    def test_carbon_is_sized_with_carbon_strength(self):
+        """Карбонът покрива само недостига и при 600 MPa, не при σ на PLA."""
+        # един периметър: печатаният капс не стига → трябва карбон
+        st = structure.analyse(0.773, self.geom, self.lw, self.mission,
+                               "naca2412", safety_factor=1.5, perimeters=1)
+        self.assertFalse(st["print_ok"])
+        # Двата материала работят при еднаква деформация: при допустимото
+        # напрежение на карбона печатът носи само E_print/E_carbon от своето.
+        missing = max(0.0, st["m_ult_nm"]
+                      - st["print_capacity_compat_nm"])
+        expected = missing * 1000.0 / (st["spar_height_mm"]
+                                       * structure.CARBON_ALLOW_MPA)
+        self.assertAlmostEqual(st["carbon_area_req_mm2"], expected, places=9)
+        # избраната лента наистина покрива нуждата
+        self.assertGreaterEqual(st["carbon"]["total_area_mm2"], expected)
+        # и не е абсурдно голяма (преди беше ~70× повече от нужното)
+        self.assertLess(st["carbon"]["total_area_mm2"], 5.0 * expected + 1.0)
+
+    def test_no_carbon_area_needed_when_printed_spar_is_strong_enough(self):
+        st = structure.analyse(0.2, aero.wing_geometry(0.10, 7.0, 0.75),
+                               self.lw, self.mission, "naca2412",
+                               safety_factor=1.5, perimeters=3)
+        self.assertTrue(st["print_ok"])
+        self.assertEqual(st["carbon_area_req_mm2"], 0.0)
+        # тук лимитът е коравината, не якостта
+        self.assertTrue(st["carbon_for_stiffness"])
+
+    def test_carbon_only_for_strength_or_stiffness(self):
+        for mass, area, per in ((0.2, 0.10, 3), (0.773, 0.24, 1),
+                                (1.5, 0.35, 2)):
+            st = structure.analyse(mass, aero.wing_geometry(area, 7.0, 0.75),
+                                   self.lw, self.mission, "naca2412",
+                                   safety_factor=1.5, perimeters=per)
+            expected = ((not st["print_ok"])
+                        or st["deflection_print_mm"]
+                        > st["deflection_limit_mm"])
+            self.assertEqual(st["carbon_required"], expected,
+                             (mass, area, per))
+            if not st["carbon_required"]:
+                self.assertEqual(st["carbon"]["count"], 0)
+
+
+class TestDeflection(unittest.TestCase):
+    def test_shape_factor_is_physical(self):
+        # елиптично натоварване ≈ 0.29 от върховия точков товар
+        self.assertAlmostEqual(structure.DEFLECTION_SHAPE_FACTOR, 0.29,
+                               places=6)
+
+    def test_deflection_grows_with_mass(self):
+        geom = aero.wing_geometry(0.24, 7.0, 0.75)
+        mission = presets.mission("trainer")
+        lw = materials.get("lw_pla")
+        light = structure.analyse(0.5, geom, lw, mission, "naca2412")
+        heavy = structure.analyse(1.5, geom, lw, mission, "naca2412")
+        self.assertGreater(heavy["deflection_print_mm"],
+                           light["deflection_print_mm"])
+
+
 class TestAnalyse(unittest.TestCase):
     def setUp(self):
         self.geom = aero.wing_geometry(0.24, 7.0, 0.75)
