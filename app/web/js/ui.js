@@ -67,6 +67,19 @@ const UI = {
     this.updateAirfoilInfo();
   },
 
+  /** Прилага шрифта и размера от настройките (CSS променливи). */
+  applyFont(ui) {
+    if (!ui) return;
+    const root = document.documentElement;
+    const size = Math.min(20, Math.max(11,
+      Math.round(Number(ui.size) || 13)));
+    const css = ui.css || (this.presets && this.presets.ui && this.presets.ui.css)
+      || '"Segoe UI", Tahoma, sans-serif';
+    root.style.setProperty("--ui-font", css);
+    root.style.setProperty("--ui-font-size", size + "px");
+    root.style.setProperty("--ui-scale", String(size / 13));
+  },
+
   updateMissionInfo() {
     const key = this.$("missionSelect").value;
     const m = this.presets.missions.find((x) => x.key === key);

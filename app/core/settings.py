@@ -47,6 +47,39 @@ DEFAULT_DESIGN = {
     "payload_total_g": 600.0,
 }
 
+# Шрифтове за интерфейса (ключ → CSS font-family стек)
+FONTS = [
+    {"key": "segoe", "label": "Segoe UI (по подразбиране)",
+     "css": '"Segoe UI", Tahoma, sans-serif'},
+    {"key": "system", "label": "Системен шрифт",
+     "css": 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif'},
+    {"key": "arial", "label": "Arial / Helvetica",
+     "css": 'Arial, Helvetica, sans-serif'},
+    {"key": "verdana", "label": "Verdana (широк, четим)",
+     "css": 'Verdana, Geneva, sans-serif'},
+    {"key": "tahoma", "label": "Tahoma", "css": 'Tahoma, Geneva, sans-serif'},
+    {"key": "trebuchet", "label": "Trebuchet MS",
+     "css": '"Trebuchet MS", "Segoe UI", sans-serif'},
+    {"key": "georgia", "label": "Georgia (серифен)",
+     "css": 'Georgia, "Times New Roman", serif'},
+    {"key": "consolas", "label": "Consolas (равноширок)",
+     "css": 'Consolas, "Courier New", monospace'},
+]
+
+DEFAULT_UI = {
+    "font": "segoe",
+    "size": 13,      # базов размер в px (11–20)
+}
+
+UI_SIZE_MIN = 11
+UI_SIZE_MAX = 20
+
+
+def fonts():
+    """Списък с шрифтове за UI."""
+    return [dict(f) for f in FONTS]
+
+
 _STATE = {
     "custom": False,
     "defaults": {},
@@ -85,6 +118,18 @@ def _merge_defaults(raw):
     if filament not in materials.FILAMENTS:
         filament = next(iter(materials.FILAMENTS))
 
+    ui = raw.get("ui") if isinstance(raw.get("ui"), dict) else {}
+    font_keys = [f["key"] for f in FONTS]
+    font = str(ui.get("font") or DEFAULT_UI["font"])
+    if font not in font_keys:
+        font = DEFAULT_UI["font"]
+    size = _num(ui.get("size"), DEFAULT_UI["size"])
+    try:
+        size = int(round(float(size)))
+    except (TypeError, ValueError):
+        size = DEFAULT_UI["size"]
+    size = int(max(UI_SIZE_MIN, min(UI_SIZE_MAX, size)))
+
     return {
         "print": {
             "filament": filament,
@@ -106,7 +151,26 @@ def _merge_defaults(raw):
             "payload_total_g": _num(des.get("payload_total_g"),
                                     DEFAULT_DESIGN["payload_total_g"]),
         },
+        "ui": {
+            "font": font,
+            "size": size,
+        },
     }
+
+
+def get_ui():
+    """Шрифт, размер и готов CSS стек за интерфейса."""
+    ui = dict(get_defaults()["ui"])
+    ui["css"] = get_font_css(ui["font"])
+    return ui
+
+
+def get_font_css(key):
+    """CSS font-family за ключ на шрифт (fallback към подразбирания)."""
+    for font in FONTS:
+        if font["key"] == key:
+            return font["css"]
+    return FONTS[0]["css"]
 
 
 def get_defaults():
@@ -164,6 +228,8 @@ def get_settings():
         "filaments": materials.list_filaments(),
         "defaults": get_defaults(),
         "builtin_filament_keys": list(materials.BUILTIN_FILAMENTS.keys()),
+        "fonts": fonts(),
+        "size_range": [UI_SIZE_MIN, UI_SIZE_MAX],
     }
 
 

@@ -13,6 +13,7 @@ const Settings = {
     this.$("settingsStatus").textContent = "зарежда…";
     try {
       this.data = await API.getSettings();
+      this._savedUi = Object.assign({}, (this.data.defaults || {}).ui);
       this.render();
       this.$("settingsStatus").textContent = this.data.custom
         ? "използват се твоите настройки"
@@ -22,8 +23,15 @@ const Settings = {
     }
   },
 
-  close() {
+  close(revert = true) {
     this.$("settingsModal").classList.add("hidden");
+    if (revert && this._savedUi) {
+      // връщаме изгледа, ако потребителят не е запазил
+      const font = (this.data && this.data.fonts || [])
+        .find((f) => f.key === this._savedUi.font);
+      UI.applyFont(Object.assign({}, this._savedUi,
+        { css: font ? font.css : null }));
+    }
   },
 
   render() {
@@ -31,6 +39,23 @@ const Settings = {
     this.renderFilaments(d.filaments);
     this.$("settingsPathInfo").textContent = "Файл: " + d.path +
       (d.error ? "  ·  " + d.error : "");
+
+    // ----- изглед: шрифт и размер
+    const ui = (d.defaults || {}).ui || {};
+    const fontSelect = this.$("setFont");
+    fontSelect.innerHTML = "";
+    (d.fonts || []).forEach((font) => {
+      const opt = UI.el("option", null, font.label);
+      opt.value = font.key;
+      opt.style.fontFamily = font.css;
+      fontSelect.appendChild(opt);
+    });
+    fontSelect.value = ui.font || (d.fonts && d.fonts[0] && d.fonts[0].key);
+    const range = d.size_range || [11, 20];
+    const sizeInput = this.$("setFontSize");
+    sizeInput.min = range[0];
+    sizeInput.max = range[1];
+    sizeInput.value = ui.size || 13;
 
     const filSelect = this.$("setDefaultFilament");
     filSelect.innerHTML = "";
@@ -178,6 +203,10 @@ const Settings = {
         mission: this.$("setDefaultMission").value,
         payload_total_g: num("setPayload") || 600,
       },
+      ui: {
+        font: this.$("setFont").value,
+        size: num("setFontSize") || 13,
+      },
     };
   },
 
@@ -195,7 +224,8 @@ const Settings = {
         return;
       }
       this.data = res.settings;
-      this.close();
+      this._savedUi = Object.assign({}, (res.settings.defaults || {}).ui);
+      this.close(false);
       await App.refreshFromSettings();
       document.getElementById("calcStatus").textContent =
         "настройките са запазени";
@@ -215,6 +245,7 @@ const Settings = {
         return;
       }
       this.data = res.settings;
+      this._savedUi = Object.assign({}, (res.settings.defaults || {}).ui);
       this.render();
       await App.refreshFromSettings();
       status.textContent = "възстановени вградени стойности";
@@ -232,6 +263,21 @@ const Settings = {
     });
     this.$("btnSaveSettings").addEventListener("click", () => this.save());
     this.$("btnResetSettings").addEventListener("click", () => this.reset());
+
+    // жива промяна на изгледа (шрифт / размер)
+    const applyLive = () => {
+      const key = this.$("setFont").value;
+      const font = ((this.data && this.data.fonts) || [])
+        .find((f) => f.key === key);
+      UI.applyFont({
+        font: key,
+        css: font ? font.css : null,
+        size: this.$("setFontSize").value,
+      });
+    };
+    this.$("setFont").addEventListener("change", applyLive);
+    this.$("setFontSize").addEventListener("input", applyLive);
+
     this.$("btnAddFilament").addEventListener("click", () => this.addRow({
       name: "Нов филамент",
       printed_density: 1.24,

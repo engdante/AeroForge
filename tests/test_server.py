@@ -77,6 +77,23 @@ class TestPresetsPayload(unittest.TestCase):
                           "e_mpa", "layer_factor", "max_flow", "expansion"):
                 self.assertIn(field, filament)
 
+    def test_settings_have_fonts_and_ui(self):
+        data = server.get_settings()
+        self.assertIn("fonts", data)
+        self.assertIn("size_range", data)
+        self.assertIn("ui", data["defaults"])
+        self.assertIn("font", data["defaults"]["ui"])
+        self.assertIn("size", data["defaults"]["ui"])
+        self.assertGreaterEqual(len(data["fonts"]), 5)
+        self.assertEqual(len(data["size_range"]), 2)
+
+    def test_presets_include_ui_with_css(self):
+        data = server.get_presets()
+        self.assertIn("ui", data)
+        self.assertIn("css", data["ui"])
+        self.assertIsInstance(data["ui"]["size"], int)
+        self.assertIn("sans-serif", data["ui"]["css"])
+
     def test_get_model3d(self):
         model = server.get_model3d({
             "mission": "trainer",

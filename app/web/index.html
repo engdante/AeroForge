@@ -372,6 +372,22 @@
 
     <div class="settings-body">
       <section class="settings-section">
+        <h4>Изглед</h4>
+        <div class="settings-grid">
+          <div class="field">
+            <label for="setFont">Шрифт на приложението</label>
+            <select id="setFont"></select>
+          </div>
+          <div class="field">
+            <label for="setFontSize">Размер на шрифта (px)</label>
+            <input type="number" id="setFontSize" min="11" max="20" step="1">
+            <p class="hint">Препоръчително 13–15 px. Промяната се вижда
+              веднага; „Отказ“ връща старото.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-section">
         <h4>Филаменти</h4>
         <p class="hint">
           Плътността е на <b>отпечатаното</b> тяло (за LW-PLA е по-ниска от
@@ -434,7 +450,7 @@
             <label for="setEndurance">Време на полет (мин)</label>
             <input type="number" id="setEndurance" step="1" min="1" max="120">
           </div>
-          <div class="field">
+          <div class="field field-wide">
             <label>Легло на принтера (mm)</label>
             <div class="grid-3">
               <input type="number" id="setBedX" step="5" min="60">

@@ -43,6 +43,25 @@ class TestDefaults(SettingsTestBase):
         self.assertIn("mission", d["design"])
         self.assertGreater(d["design"]["payload_total_g"], 0)
 
+    def test_ui_defaults(self):
+        ui = settings.get_ui()
+        self.assertEqual(ui["font"], settings.DEFAULT_UI["font"])
+        self.assertEqual(ui["size"], settings.DEFAULT_UI["size"])
+        self.assertIn("css", ui)
+        self.assertIn("Segoe UI", ui["css"])
+
+    def test_fonts_catalog(self):
+        fonts = settings.fonts()
+        self.assertGreaterEqual(len(fonts), 5)
+        for font in fonts:
+            self.assertIn("key", font)
+            self.assertIn("label", font)
+            self.assertIn("css", font)
+        css = settings.get_font_css("consolas")
+        self.assertIn("monospace", css)
+        # непознат ключ → подразбираният шрифт
+        self.assertEqual(settings.get_font_css("няма"), settings.FONTS[0]["css"])
+
     def test_defaults_are_copy(self):
         d = settings.get_defaults()
         d["print"]["filament"] = "нещо"
@@ -158,6 +177,38 @@ class TestSaveAndApply(SettingsTestBase):
         self.assertTrue(result["ok"])
         self.assertIn(design.default_inputs()["print"]["filament"],
                       materials.FILAMENTS)
+
+    def test_ui_settings_are_saved_and_applied(self):
+        result = settings.save({
+            "filaments": self.current_catalog(),
+            "defaults": {"ui": {"font": "consolas", "size": 16}},
+        })
+        self.assertTrue(result["ok"], result.get("error"))
+        ui = settings.get_ui()
+        self.assertEqual(ui["font"], "consolas")
+        self.assertEqual(ui["size"], 16)
+        self.assertIn("monospace", ui["css"])
+        # записва се и в самия файл
+        with open(settings.SETTINGS_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+        self.assertEqual(raw["defaults"]["ui"]["size"], 16)
+
+    def test_ui_size_is_clamped(self):
+        for entered, expected in ((5, 11), (99, 20), (0, 11)):
+            settings.save({
+                "filaments": self.current_catalog(),
+                "defaults": {"ui": {"size": entered}},
+            })
+            self.assertEqual(settings.get_ui()["size"], expected, entered)
+
+    def test_unknown_font_falls_back_to_default(self):
+        result = settings.save({
+            "filaments": self.current_catalog(),
+            "defaults": {"ui": {"font": "няма_такъв", "size": 14}},
+        })
+        self.assertTrue(result["ok"])
+        self.assertEqual(settings.get_ui()["font"], settings.DEFAULT_UI["font"])
+
 
 
 class TestReset(SettingsTestBase):

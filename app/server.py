@@ -89,6 +89,7 @@ def get_presets():
     return {
         "version": design_mod.VERSION,
         "currency": presets.CURRENCY,
+        "ui": app_settings.get_ui(),
         "missions": missions,
         "filaments": materials.list_filaments(),
         "airfoils": airfoils.list_airfoils(),

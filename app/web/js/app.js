@@ -10,6 +10,7 @@ const App = {
     try {
       const presets = await API.presets();
       UI.setPresets(presets);
+      UI.applyFont(presets.ui);
       this.paths = presets.paths;
       UI.writeInputs(presets.defaults);
     } catch (err) {
@@ -33,6 +34,7 @@ const App = {
     try {
       const presets = await API.presets();
       UI.setPresets(presets);
+      UI.applyFont(presets.ui);
       this.paths = presets.paths;
       const keys = presets.filaments.map((f) => f.key);
       if (!keys.includes(current.print.filament)) {

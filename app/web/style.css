@@ -13,6 +13,24 @@
   --error: #ff7a7a;
   --info: #7fb2ff;
   --radius: 8px;
+
+  /* Шрифт и размер се задават от „Настройки“ (settings.json → ui) */
+  --ui-font: "Segoe UI", Tahoma, sans-serif;
+  --ui-font-size: var(--fs-base);
+  --ui-scale: 1;
+
+  /* Производни размери (запазват пропорциите при друга база) */
+  --fs-xxs: calc(var(--ui-font-size) * 0.77);   /* ~10 px */
+  --fs-xs: calc(var(--ui-font-size) * 0.81);    /* ~10.5 px */
+  --fs-s: calc(var(--ui-font-size) * 0.85);     /* ~11 px */
+  --fs-s2: calc(var(--ui-font-size) * 0.88);    /* ~11.5 px */
+  --fs-m: calc(var(--ui-font-size) * 0.92);     /* ~12 px */
+  --fs-m2: calc(var(--ui-font-size) * 0.96);    /* ~12.5 px */
+  --fs-base: var(--ui-font-size);               /* 13 px */
+  --fs-l: calc(var(--ui-font-size) * 1.08);     /* ~14 px */
+  --fs-xl: calc(var(--ui-font-size) * 1.31);    /* ~17 px */
+  --fs-2xl: calc(var(--ui-font-size) * 1.38);   /* ~18 px */
+  --fs-3xl: calc(var(--ui-font-size) * 1.46);   /* ~19 px */
 }
 
 * { box-sizing: border-box; }
@@ -22,9 +40,16 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", Tahoma, sans-serif;
-  font-size: 13px;
+  font-family: var(--ui-font);
+  font-size: var(--ui-font-size);
 }
+
+/* Формните елементи не наследяват шрифта по подразбиране */
+button, input, select, textarea, option {
+  font-family: inherit;
+  font-size: inherit;
+}
+
 
 .app { display: flex; flex-direction: column; height: 100vh; }
 .spacer { flex: 1; }
@@ -40,7 +65,7 @@ html, body {
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
-.brand { font-size: 19px; font-weight: 600; letter-spacing: .3px; }
+.brand { font-size: var(--fs-3xl); font-weight: 600; letter-spacing: .3px; }
 .brand span { color: var(--accent); }
 .chip {
   background: #17293a;
@@ -48,7 +73,7 @@ html, body {
   color: #9fd3f5;
   padding: 3px 10px;
   border-radius: 20px;
-  font-size: 11.5px;
+  font-size: var(--fs-s2);
 }
 .name-input {
   background: var(--bg2);
@@ -57,7 +82,7 @@ html, body {
   border-radius: 6px;
   padding: 6px 10px;
   width: 190px;
-  font-size: 13px;
+  font-size: var(--fs-base);
 }
 .name-input:focus { outline: none; border-color: var(--accent2); }
 
@@ -68,14 +93,14 @@ html, body {
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 11px;
-  font-size: 12.5px;
+  font-size: var(--fs-m2);
   cursor: pointer;
   transition: background .12s, border-color .12s;
   white-space: nowrap;
 }
 .btn:hover { background: #24303f; border-color: #3a4a60; }
 .btn:active { transform: translateY(1px); }
-.btn-sm { padding: 4px 8px; font-size: 11.5px; }
+.btn-sm { padding: 4px 8px; font-size: var(--fs-s2); }
 .btn-accent {
   background: linear-gradient(180deg, #2b9fd6, #1f7ba8);
   border-color: #2b9fd6;
@@ -89,8 +114,8 @@ html, body {
 .layout { display: flex; flex: 1; min-height: 0; }
 
 .side {
-  width: 400px;
-  flex: 0 0 400px;
+  width: clamp(360px, calc(400px * var(--ui-scale)), 540px);
+  flex: 0 0 clamp(360px, calc(400px * var(--ui-scale)), 540px);
   display: flex;
   flex-direction: column;
   background: var(--bg2);
@@ -111,7 +136,7 @@ html, body {
   border-bottom: 2px solid transparent;
   color: var(--text-dim);
   padding: 7px 6px;
-  font-size: 12px;
+  font-size: var(--fs-m);
   cursor: pointer;
   border-radius: 6px 6px 0 0;
 }
@@ -128,7 +153,7 @@ html, body {
 .field { margin-bottom: 12px; }
 .field > label {
   display: block;
-  font-size: 11.5px;
+  font-size: var(--fs-s2);
   color: var(--text-dim);
   margin-bottom: 4px;
   text-transform: uppercase;
@@ -141,7 +166,7 @@ input[type="number"], input[type="text"], select {
   color: var(--text);
   border-radius: 6px;
   padding: 7px 9px;
-  font-size: 13px;
+  font-size: var(--fs-base);
   font-family: inherit;
 }
 input:focus, select:focus { outline: none; border-color: var(--accent2); }
@@ -155,7 +180,7 @@ select { cursor: pointer; }
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: var(--fs-m);
   color: var(--text);
   cursor: pointer;
   text-transform: none;
@@ -163,7 +188,7 @@ select { cursor: pointer; }
 }
 .hint {
   margin: 5px 0 0;
-  font-size: 11px;
+  font-size: var(--fs-s);
   color: #6f8098;
   line-height: 1.45;
 }
@@ -172,12 +197,12 @@ select { cursor: pointer; }
 .component-table-head,
 .component-row {
   display: grid;
-  grid-template-columns: 1fr 74px 44px 56px 62px 24px;
+  grid-template-columns: minmax(90px, 1fr) 84px 52px 60px 66px 24px;
   gap: 4px;
   align-items: center;
 }
 .component-table-head {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: #6f8098;
   text-transform: uppercase;
   margin-bottom: 4px;
@@ -186,14 +211,15 @@ select { cursor: pointer; }
 .component-row { margin-bottom: 4px; }
 .component-row input, .component-row select {
   padding: 5px 6px;
-  font-size: 12px;
+  font-size: var(--fs-m);
+  min-width: 0;
 }
 .row-del {
   background: transparent;
   border: none;
   color: #7a5b5b;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--fs-l);
   line-height: 1;
 }
 .row-del:hover { color: var(--error); }
@@ -210,7 +236,7 @@ select { cursor: pointer; }
   border: 1px solid var(--line);
   border-radius: 6px;
   padding: 6px 8px;
-  font-size: 11.5px;
+  font-size: var(--fs-s2);
   color: var(--text-dim);
 }
 .stats-mini b { color: var(--text); font-weight: 600; }
@@ -221,7 +247,7 @@ select { cursor: pointer; }
   gap: 8px;
   padding: 7px 12px;
   border-top: 1px solid var(--line);
-  font-size: 11.5px;
+  font-size: var(--fs-s2);
   color: #6f8098;
   background: #121822;
 }
@@ -240,11 +266,11 @@ select { cursor: pointer; }
   flex-wrap: wrap;
   margin-bottom: 12px;
 }
-.verdict { font-size: 17px; font-weight: 600; }
+.verdict { font-size: var(--fs-xl); font-weight: 600; }
 .verdict.ok { color: var(--ok); }
 .verdict.warn { color: var(--warn); }
 .verdict.error { color: var(--error); }
-.verdict-stats { font-size: 11.5px; color: var(--text-dim); }
+.verdict-stats { font-size: var(--fs-s2); color: var(--text-dim); }
 .verdict-stats span { margin-right: 10px; }
 
 .cards {
@@ -260,18 +286,18 @@ select { cursor: pointer; }
   padding: 9px 11px;
 }
 .card .k {
-  font-size: 10.5px;
+  font-size: var(--fs-xs);
   color: #6f8098;
   text-transform: uppercase;
   letter-spacing: .04em;
 }
-.card .v { font-size: 18px; margin-top: 3px; }
-.card .s { font-size: 10.5px; color: #6f8098; margin-top: 2px; }
+.card .v { font-size: var(--fs-2xl); margin-top: 3px; }
+.card .s { font-size: var(--fs-xs); color: #6f8098; margin-top: 2px; }
 .card.hl { border-color: #2b5a74; background: #16222e; }
 
 .block { margin-bottom: 18px; }
 .block h3 {
-  font-size: 12.5px;
+  font-size: var(--fs-m2);
   text-transform: uppercase;
   letter-spacing: .05em;
   color: #7fa7c9;
@@ -290,9 +316,9 @@ select { cursor: pointer; }
   border: 1px solid var(--line);
   border-left-width: 3px;
   border-radius: 5px;
-  font-size: 12px;
+  font-size: var(--fs-m);
 }
-.check .icon { font-size: 12px; line-height: 1.4; }
+.check .icon { font-size: var(--fs-m); line-height: 1.4; }
 .check .t { font-weight: 600; }
 .check .d { color: var(--text-dim); margin-top: 2px; line-height: 1.45; }
 .check.ok { border-left-color: var(--ok); }
@@ -303,7 +329,7 @@ select { cursor: pointer; }
 table.kv, table.data {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: var(--fs-m);
 }
 table.kv td, table.data td, table.data th {
   padding: 5px 8px;
@@ -314,7 +340,7 @@ table.kv td:last-child { text-align: right; font-variant-numeric: tabular-nums; 
 table.data th {
   text-align: left;
   color: #7fa7c9;
-  font-size: 11px;
+  font-size: var(--fs-s);
   text-transform: uppercase;
   letter-spacing: .04em;
   border-bottom: 1px solid var(--line);
@@ -327,7 +353,7 @@ table.data tr.total td { font-weight: 700; border-top: 1px solid var(--line); }
   grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
   gap: 12px;
 }
-.chart-title { font-size: 11.5px; color: var(--text-dim); margin-bottom: 4px; }
+.chart-title { font-size: var(--fs-s2); color: var(--text-dim); margin-bottom: 4px; }
 canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px; max-width: 100%; }
 
 /* ---------- 3D преглед ---------- */
@@ -355,7 +381,7 @@ canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px;
   border-left: 3px solid var(--warn);
   background: #191f28;
   color: #9dabbf;
-  font-size: 11.5px;
+  font-size: var(--fs-s2);
   line-height: 1.5;
   border-radius: 0 6px 6px 0;
 }
@@ -387,7 +413,7 @@ canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px;
   padding: 12px 14px;
   border-bottom: 1px solid var(--line);
 }
-.modal-head h3 { margin: 0; font-size: 14px; }
+.modal-head h3 { margin: 0; font-size: var(--fs-l); }
 .modal-foot { padding: 8px 14px; border-top: 1px solid var(--line); }
 .designs-list { overflow-y: auto; padding: 8px 10px; }
 .design-item {
@@ -401,7 +427,7 @@ canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px;
   background: var(--bg3);
 }
 .design-item .dn { font-weight: 600; }
-.design-item .dm { color: var(--text-dim); font-size: 11px; }
+.design-item .dm { color: var(--text-dim); font-size: var(--fs-s); }
 
 /* скролбари */
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -410,34 +436,46 @@ canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px;
 ::-webkit-scrollbar-thumb:hover { background: #38485e; }
 
 /* ---------- настройки ---------- */
-.settings-box { width: min(1100px, 96vw); }
+.settings-box { width: min(1180px, 96vw); }
 .settings-body { overflow-y: auto; padding: 12px 16px; }
 .settings-section { margin-bottom: 18px; }
 .settings-section h4 {
   margin: 0 0 6px;
-  font-size: 13px;
+  font-size: var(--fs-base);
   color: #8fd3ff;
   letter-spacing: .02em;
 }
 .fil-head, .fil-row {
   display: grid;
-  grid-template-columns: 1.6fr 62px 62px 60px 66px 56px 54px 58px 24px;
+  grid-template-columns:
+    minmax(120px, 1.4fr)   /* име */
+    78px                   /* g/cm³ */
+    76px                   /* €/kg */
+    74px                   /* MPa */
+    88px                   /* E, MPa */
+    70px                   /* слоева */
+    68px                   /* дебит */
+    72px                   /* разпен. */
+    24px;                  /* изтрий */
   gap: 4px;
   align-items: center;
 }
 .fil-head {
-  font-size: 10px;
+  font-size: var(--fs-xxs);
   color: #6f8098;
   text-transform: uppercase;
   letter-spacing: .03em;
   margin-bottom: 4px;
 }
+.fil-head span { white-space: nowrap; overflow: hidden; }
 .fil-rows { max-height: 250px; overflow-y: auto; }
 .fil-row { margin-bottom: 4px; }
 .fil-row input {
-  padding: 5px 6px;
-  font-size: 12px;
+  padding: 5px 7px;
+  font-size: var(--fs-m);
+  font-family: inherit;
   width: 100%;
+  min-width: 0;
   background: #131a23;
   border: 1px solid var(--line);
   color: var(--text);
@@ -446,9 +484,25 @@ canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px;
 .fil-row input:focus { outline: none; border-color: var(--accent2); }
 .settings-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
   gap: 8px;
 }
-.settings-foot { display: flex; align-items: center; gap: 8px; }
+.settings-grid .field-wide { grid-column: 1 / -1; }
+.settings-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+/* в плътните таблици стрелките на number полетата крадат място от текста */
+.component-row input[type="number"]::-webkit-outer-spin-button,
+.component-row input[type="number"]::-webkit-inner-spin-button,
+.fil-row input[type="number"]::-webkit-outer-spin-button,
+.fil-row input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.component-row input[type="number"],
+.fil-row input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 
 
