@@ -16,7 +16,11 @@ a = Analysis(
     hiddenimports=[
         'core.materials', 'core.airfoils', 'core.presets', 'core.aero',
         'core.propulsion', 'core.structure', 'core.cg', 'core.printcost',
-        'core.weight', 'core.design', 'core.report',
+        'core.weight', 'core.checks', 'core.design', 'core.report',
+        'core.fuselage', 'core.layout', 'core.fairing', 'core.quality',
+        'core.printgeom', 'core.stl', 'core.assembly', 'core.meshcheck',
+        'core.export_3mf', 'core.export_step', 'core.export_dxf',
+        'core.model_export', 'core.solidcraft_export', 'core.export_job',
     ],
     hookspath=[],
     hooksconfig={},

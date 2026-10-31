@@ -47,8 +47,18 @@ class TestDefaults(SettingsTestBase):
         ui = settings.get_ui()
         self.assertEqual(ui["font"], settings.DEFAULT_UI["font"])
         self.assertEqual(ui["size"], settings.DEFAULT_UI["size"])
+        self.assertEqual(ui["quality"], "high")
         self.assertIn("css", ui)
         self.assertIn("Segoe UI", ui["css"])
+
+    def test_quality_is_validated(self):
+        # невалидната стойност пада до подразбиращата, валидната се пази
+        fallback = settings._merge_defaults({"ui": {"quality": "hyper"}})
+        self.assertEqual(fallback["ui"]["quality"], "high")
+        low = settings._merge_defaults({"ui": {"quality": "low"}})
+        self.assertEqual(low["ui"]["quality"], "low")
+        ultra = settings._merge_defaults({"ui": {"quality": "ultra"}})
+        self.assertEqual(ultra["ui"]["quality"], "ultra")
 
     def test_fonts_catalog(self):
         fonts = settings.fonts()

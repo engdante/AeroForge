@@ -102,14 +102,21 @@ def rpm_limits(d_m, v_cruise_ms, pitch_m):
 def size_system(mass_kg, geom, v_stall_ms, v_cruise_ms, mission,
                 cells=3, capacity_mah=None, endurance_min=8.0,
                 thrust_to_weight=None, power_to_weight=None,
-                prop_d_in=None, cd0=None, battery_mass_g=None):
+                prop_d_in=None, cd0=None, battery_mass_g=None,
+                motor_count=1, oswald=None):
     """
     Пълно оразмеряване на задвижването.
 
     връща dict с мощности, тяга, витло, Kv, ток, ESC, батерия и време.
+    motor_count > 1 разделя мощността и тока между еднакви мотори (тягата
+    и батерията остават общи).
+
+    oswald — изчисленият Oswald по планформата; без него се ползва
+    мисийната стойност (обратна съвместимост).
     """
     cells = int(presets.clamp(int(cells or 3), 1, 14))
     voltage = cells * LIPO_CELL_V
+    motor_count = int(presets.clamp(int(motor_count or 1), 1, 4))
 
     tw = float(thrust_to_weight if thrust_to_weight else
                mission.get("thrust_to_weight", 0.6))
@@ -173,14 +180,19 @@ def size_system(mass_kg, geom, v_stall_ms, v_cruise_ms, mission,
 
     i_max = p_max_elec / voltage if voltage > 0 else 0.0
     esc_required_a = 1.25 * i_max
-    esc_a = presets.pick_at_least(presets.ESC_SIZES_A, esc_required_a)
-    esc_saturated = esc_required_a > presets.ESC_SIZES_A[-1]
+    # Всеки мотор носи 1/n от мощността; ESC се избира за един мотор.
+    p_motor_elec = p_max_elec / motor_count
+    i_motor = i_max / motor_count
+    esc_motor_required = 1.25 * i_motor
+    esc_a = presets.pick_at_least(presets.ESC_SIZES_A, esc_motor_required)
+    esc_saturated = esc_motor_required > presets.ESC_SIZES_A[-1]
 
     # Крейсер: мощност от полярата
     cd0_used = cd0 if cd0 is not None else mission.get("cd0", 0.032)
     cruise = aero.level_flight(
         mass_kg, geom["area_m2"], geom["aspect_ratio"],
-        mission.get("oswald", 0.75), cd0_used, v_cruise_ms, ETA_PROP)
+        mission.get("oswald", 0.75) if oswald is None else float(oswald),
+        cd0_used, v_cruise_ms, ETA_PROP)
     p_elec_cruise = cruise["p_shaft_w"] / (ETA_MOTOR * ETA_ESC)
 
     energy_needed_wh = p_elec_cruise * endurance_min / 60.0 / DOD
@@ -246,10 +258,14 @@ def size_system(mass_kg, geom, v_stall_ms, v_cruise_ms, mission,
         "rpm_power_over_tip": power_over_tip,
         "rpm_power_below_pitch": power_below_pitch,
         "kv": kv,
+        "motor_count": motor_count,
+        "p_motor_elec_w": p_motor_elec,
+        "i_motor_a": i_motor,
         "i_max_a": i_max,
         "i_at_target_a": (p_shaft_avail / (ETA_MOTOR * ETA_ESC * voltage)
                           if voltage > 0 else 0.0),
         "esc_required_a": esc_required_a,
+        "esc_motor_required_a": esc_motor_required,
         "esc_a": esc_a,
         "esc_saturated": esc_saturated,
         "cruise": {
@@ -302,29 +318,35 @@ def estimate_component_masses(spec, mission_key, provided_categories):
     provided = set(provided_categories or [])
     out = []
 
-    def add(cid, name, category, unit_mass_g, note=""):
+    def add(cid, name, category, unit_mass_g, note="", qty=1):
         if category in provided:
             return
+        count = max(1, int(qty))
         out.append({
             "id": cid,
             "name": name,
             "category": category,
-            "qty": 1,
+            "qty": count,
             "unit_mass_g": round(float(unit_mass_g), 1),
-            "mass_g": round(float(unit_mass_g), 1),
+            "mass_g": round(float(unit_mass_g) * count, 1),
             "estimated": True,
             "note": note,
         })
 
     p_max = spec["p_max_elec_w"]
-    motor_g = max(MOTOR_MIN_G, p_max / MOTOR_W_PER_G)
-    esc_g = max(ESC_MIN_G, p_max / ESC_W_PER_G)
-    add("motor_est", "Мотор (оценка по мощност)", "motor", motor_g,
-        "%d W входна мощност, мин. %.0f g" % (round(p_max), MOTOR_MIN_G))
-    add("esc_est", "ESC (оценка)", "esc", esc_g,
-        "%d A, мин. %.0f g" % (spec["esc_a"], ESC_MIN_G))
+    motors = int(spec.get("motor_count", 1) or 1)
+    p_motor = float(spec.get("p_motor_elec_w") or p_max)
+    motor_g = max(MOTOR_MIN_G, p_motor / MOTOR_W_PER_G)
+    esc_g = max(ESC_MIN_G, p_motor / ESC_W_PER_G)
+    suffix = " ×%d" % motors if motors > 1 else ""
+    add("motor_est", "Мотор (оценка по мощност)" + suffix, "motor", motor_g,
+        "%d W входна мощност на мотор, мин. %.0f g"
+        % (round(p_motor), MOTOR_MIN_G), motors)
+    add("esc_est", "ESC (оценка)" + suffix, "esc", esc_g,
+        "%d A на мотор, мин. %.0f g" % (spec["esc_a"], ESC_MIN_G), motors)
     add("prop_est", "Витло %d×%d" % (spec["prop_d_in"], spec["prop_pitch_in"]),
-        "prop", presets.interp(presets.PROP_MASS_G, spec["prop_d_in"]))
+        "prop", presets.interp(presets.PROP_MASS_G, spec["prop_d_in"]),
+        qty=motors)
     add("battery_est", "Батерия %dS %d mAh" % (
         spec["battery"]["cells"], round(spec["battery"]["capacity_mah"])),
         "battery", spec["battery"]["mass_g"])

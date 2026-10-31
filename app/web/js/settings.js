@@ -57,6 +57,17 @@ const Settings = {
     sizeInput.max = range[1];
     sizeInput.value = ui.size || 13;
 
+    const quality = this.$("setQuality");
+    if (quality) {
+      quality.innerHTML = "";
+      (d.quality_levels || []).forEach((level) => {
+        const opt = UI.el("option", null, level.label);
+        opt.value = level.key;
+        quality.appendChild(opt);
+      });
+      quality.value = ui.quality || "high";
+    }
+
     const filSelect = this.$("setDefaultFilament");
     filSelect.innerHTML = "";
     d.filaments.forEach((f) => {
@@ -206,6 +217,7 @@ const Settings = {
       ui: {
         font: this.$("setFont").value,
         size: num("setFontSize") || 13,
+        quality: this.$("setQuality").value || "high",
       },
     };
   },

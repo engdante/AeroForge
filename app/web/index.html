@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AeroForge — калкулатор и генератор на RC самолет</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=072">
 </head>
 <body>
 <div class="app">
@@ -21,7 +21,7 @@
     <button class="btn" id="btnLoad" title="Заредени дизайни">📂 Дизайни</button>
     <button class="btn" id="btnSave" title="Запази дизайна">💾 Запази</button>
     <button class="btn btn-accent" id="btnExport"
-            title="Запиши отчет, BOM и JSON">📤 Отчет</button>
+            title="SVG сечения + SolidCraft скрипт → гладък STEP в папката на експорта">📤 Експорт</button>
   </header>
 
   <main class="layout">
@@ -31,6 +31,7 @@
         <button class="tab-btn active" data-tab="payload">Товар</button>
         <button class="tab-btn" data-tab="mission">Мисия</button>
         <button class="tab-btn" data-tab="wing">Крило</button>
+        <button class="tab-btn" data-tab="fuselage">Тяло</button>
         <button class="tab-btn" data-tab="tail">Опашка</button>
         <button class="tab-btn" data-tab="power">Мотор</button>
         <button class="tab-btn" data-tab="print">Печат</button>
@@ -140,10 +141,154 @@
             <select id="airfoilSelect"></select>
             <p class="hint" id="airfoilInfo"></p>
           </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="tipStyle">Тип на върха</label>
+              <select id="tipStyle"></select>
+            </div>
+            <div class="field">
+              <label for="tipFrac">Закръгляне (% от полуразмаха)</label>
+              <input type="number" id="tipFrac" step="1" min="0" max="35"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="washout">Усукване washout (°)</label>
+              <input type="number" id="washout" step="0.5" min="0" max="4"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="wingletHeight">Уинглет — височина (mm)</label>
+              <input type="number" id="wingletHeight" step="5" min="0"
+                     max="400" placeholder="0 = без">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="wingletCant">Уинглет — наклон (°)</label>
+              <input type="number" id="wingletCant" step="5" min="45" max="90"
+                     value="85">
+            </div>
+            <div class="field">
+              <label for="wingletToe">Уинглет — ъгъл (°)</label>
+              <input type="number" id="wingletToe" step="0.5" min="-5" max="5"
+                     value="0">
+            </div>
+          </div>
+          <p class="hint" id="wingletHint"></p>
           <canvas id="airfoilCanvas" width="330" height="130"></canvas>
         </div>
 
+        <div class="pane" id="pane-fuselage">
+          <p class="hint" id="fusHint"></p>
+          <div class="grid-2">
+            <div class="field">
+              <label for="fusLength">Дължина (mm)</label>
+              <input type="number" id="fusLength" step="10" min="120"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="fusLengthRatio">Дължина / размах</label>
+              <input type="number" id="fusLengthRatio" step="0.05" min="0.25"
+                     max="1.6" placeholder="авто">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="fusWidth">Ширина (mm)</label>
+              <input type="number" id="fusWidth" step="5" min="20"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="fusHeight">Височина (mm)</label>
+              <input type="number" id="fusHeight" step="5" min="20"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="field">
+            <label for="fusShape">Сечение на тялото</label>
+            <select id="fusShape"></select>
+          </div>
+          <div class="grid-3">
+            <div class="field">
+              <label for="fusNose">Нос (%)</label>
+              <input type="number" id="fusNose" step="1" min="4" max="35"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="fusCabin">Кабина (%)</label>
+              <input type="number" id="fusCabin" step="1" min="10" max="90"
+                     placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="fusTaper">Край (%)</label>
+              <input type="number" id="fusTaper" step="1" min="5" max="95"
+                     placeholder="авто">
+            </div>
+          </div>
+          <div class="grid-2">
+            <div class="field">
+              <label for="fusHeightRatio">Височина / ширина</label>
+              <input type="number" id="fusHeightRatio" step="0.05" min="0.75"
+                     max="1.8" placeholder="авто">
+            </div>
+            <div class="field">
+              <label for="fusFrames">Шпангоути (ребра)</label>
+              <input type="number" id="fusFrames" step="1" min="0" max="12"
+                     value="0">
+            </div>
+          </div>
+          <div class="field">
+            <label for="tailBoom">Опашна част</label>
+            <select id="tailBoom"></select>
+          </div>
+          <div class="field">
+            <label for="propulsionLayout">Двигатели</label>
+            <select id="propulsionLayout"></select>
+            <p class="hint" id="propulsionHint"></p>
+          </div>
+          <div class="field">
+            <label for="wingOffset">Височина на крилото: <b id="wingOffsetValue">—</b></label>
+            <div class="offset-row">
+              <input type="range" id="wingOffsetRange" min="-44" max="44" step="1" value="42">
+              <input type="number" id="wingOffset" step="1" placeholder="mm">
+            </div>
+            <div class="offset-presets">
+              <button class="btn btn-sm" data-offset="high">Горно</button>
+              <button class="btn btn-sm" data-offset="mid">Средно</button>
+              <button class="btn btn-sm" data-offset="low">Долно</button>
+            </div>
+            <p class="hint" id="wingOffsetHint"></p>
+          </div>
+          <canvas id="fuselageCanvas" width="330" height="150"></canvas>
+        </div>
+
         <div class="pane" id="pane-tail">
+          <div class="field">
+            <label for="tailType">Тип на опашката</label>
+            <select id="tailType"></select>
+            <p class="hint" id="tailTypeHint"></p>
+          </div>
+          <div class="field">
+            <label for="tailPlanform">Планформа на опашката</label>
+            <select id="tailPlanform"></select>
+            <p class="hint" id="tailPlanformHint"></p>
+          </div>
+          <div class="field">
+            <label for="tailTipStyle">Връх на опашката</label>
+            <select id="tailTipStyle"></select>
+          </div>
+          <div class="field">
+            <label for="tailAirfoil">Профил на опашката</label>
+            <select id="tailAirfoil"></select>
+            <p class="hint" id="tailAirfoilHint"></p>
+          </div>
+          <div class="field">
+            <label for="vTailDeg">Ъгъл на V-опашката (°)</label>
+            <input type="number" id="vTailDeg" step="1" min="15" max="55"
+                   placeholder="авто">
+          </div>
           <div class="field">
             <label for="vh">Хоризонтален обемен коефициент V_h</label>
             <input type="number" id="vh" step="0.05" min="0" max="1.2"
@@ -306,7 +451,10 @@
           <span class="spacer"></span>
           <span class="hint" id="modelInfo"></span>
         </div>
-        <canvas id="model3d" width="900" height="460"></canvas>
+        <div class="viewer-canvas">
+          <canvas id="model3d" width="900" height="460"></canvas>
+          <canvas id="model3dOverlay" width="900" height="460"></canvas>
+        </div>
         <p class="hint">
           Влачене с мишката завърта, колелцето мащабира, двойно щракване
           връща изгледа 3/4. Моделът е опростен — показва пропорциите
@@ -350,6 +498,31 @@
   </main>
 </div>
 
+<div class="modal hidden" id="exportModal">
+  <div class="modal-box export-box">
+    <div class="modal-head">
+      <h3 id="exportTitle">Създаване на модел</h3>
+      <button class="btn btn-sm" id="btnCloseExport">✕</button>
+    </div>
+    <div class="export-body">
+      <div class="export-head">
+        <span id="exportSummary" class="hint">подготовка…</span>
+        <span id="exportTime" class="hint"></span>
+      </div>
+      <div class="progress"><div class="progress-bar" id="exportBar"></div></div>
+      <ul class="export-steps" id="exportSteps"></ul>
+      <pre class="export-log" id="exportLog"></pre>
+      <div class="export-result hidden" id="exportResult"></div>
+    </div>
+    <div class="modal-foot export-foot">
+      <button class="btn btn-sm" id="btnExportCancel">Отказ</button>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="btnExportFolder" disabled>Отвори папката</button>
+      <button class="btn btn-sm btn-accent" id="btnExportDone" disabled>Готово</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal hidden" id="designsModal">
   <div class="modal-box">
     <div class="modal-head">
@@ -383,6 +556,12 @@
             <input type="number" id="setFontSize" min="11" max="20" step="1">
             <p class="hint">Препоръчително 13–15 px. Промяната се вижда
               веднага; „Отказ“ връща старото.</p>
+          </div>
+          <div class="field">
+            <label for="setQuality">Качество на 3D модела</label>
+            <select id="setQuality"></select>
+            <p class="hint">По-високото качество дава по-гладки повърхности,
+              но моделът се изчислява по-бавно.</p>
           </div>
         </div>
       </section>
@@ -474,14 +653,15 @@
 </div>
 
 <script type="text/javascript" src="/eel.js"></script>
-<script src="js/api.js"></script>
-<script src="js/charts.js"></script>
-<script src="js/viewer3d.js"></script>
-<script src="js/ui.js"></script>
-<script src="js/settings.js"></script>
-<script src="js/app.js"></script>
+<script src="js/api.js?v=072"></script>
+<script src="js/charts.js?v=072"></script>
+<script src="js/viewer3d.js?v=072"></script>
+<script src="js/ui.js?v=072"></script>
+<script src="js/settings.js?v=072"></script>
+<script src="js/app.js?v=072"></script>
 </body>
 </html>
+
 
 
 

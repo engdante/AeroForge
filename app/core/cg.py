@@ -63,7 +63,8 @@ def neutral_point_mm(wing_le_mm, mac_mm, vh=0.0, has_tail=True):
 
 
 def analyse(components, airframe_g, fus_len_mm, wing_le_mm, mac_mm,
-            static_margin=0.10, has_tail=True, vh=0.0):
+            static_margin=0.10, has_tail=True, vh=0.0,
+            battery_lo_mm=None, battery_hi_mm=None, tail_boom="printed"):
     """
     Пълен анализ на ЦТ и автоматично позициониране на батерията.
 
@@ -72,14 +73,14 @@ def analyse(components, airframe_g, fus_len_mm, wing_le_mm, mac_mm,
 
         SM = (x_NP − x_CG) / MAC
 
-    Ако батерията не може да стигне изчисленото място (вън от фюзелажа),
-    връща се РЕАЛНИЯТ ЦТ с батерия на границата на обхвата, а
-    battery_feasible = False. Така „перфектен“ статичен запас никога не
-    се показва за невъзможен баланс.
+    Ако батерията не може да стигне изчисленото място (вън от физческия
+    обхват, в който се събира по сечение), връща се РЕАЛНИЯТ ЦТ с батерия
+    на границата на обхвата, а battery_feasible = False. Така „перфектен“
+    статичен запас никога не се показва за невъзможен баланс.
     """
     sm = presets.clamp(float(static_margin), 0.0, 0.30)
     air = weight.airframe_items(airframe_g, fus_len_mm, wing_le_mm, mac_mm,
-                                has_tail)
+                                has_tail, tail_boom)
     items = merge_items(components, air)
     total_g, x_cg_before = center_of_gravity(items)
 
@@ -99,12 +100,23 @@ def analyse(components, airframe_g, fus_len_mm, wing_le_mm, mac_mm,
     balanced_items = items
     x_cg = x_cg_before
 
+    # Обхватът идва от геометрията (къде батерията реално се събира),
+    # а не от фиксирани 2–72% от дължината.
+    lo = 0.02 * fus_len_mm
+    hi = 0.72 * fus_len_mm
+    if battery_lo_mm is not None and battery_hi_mm is not None:
+        try:
+            lo_new = float(battery_lo_mm)
+            hi_new = float(battery_hi_mm)
+        except (TypeError, ValueError):
+            lo_new, hi_new = lo, hi
+        if hi_new > lo_new:
+            lo, hi = lo_new, hi_new
+
     if battery_g > 0:
         rest = [i for i in items if i.get("category") != "battery"]
         rest_moment = sum(i["mass_g"] * i["x_mm"] for i in rest)
         x_battery_required = (target_mm * total_g - rest_moment) / battery_g
-        lo = 0.02 * fus_len_mm
-        hi = 0.72 * fus_len_mm
         battery_feasible = lo <= x_battery_required <= hi
         # Ако изчисленото място е извън фюзелажа — слагаме батерията на
         # най-близката достижима позиция и отчитаме реалния ЦТ.
@@ -144,6 +156,7 @@ def analyse(components, airframe_g, fus_len_mm, wing_le_mm, mac_mm,
         "battery_x_placed_mm": x_battery_placed,
         "battery_shift_mm": shift,
         "battery_feasible": battery_feasible,
+        "battery_bay_mm": [round(lo, 1), round(hi, 1)],
         "cg_achievable": achievable,
         "total_mass_g": total_g,
         "items": balanced_items,

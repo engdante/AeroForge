@@ -1,6 +1,12 @@
 ﻿/**
  * ui.js — четене/писане на формата и рендиране на резултатите.
  */
+
+/** Процент от формата (25) → дял (0.25); празно → null. */
+function pctOrNull(value) {
+  return (value === null || value === undefined) ? null : value / 100;
+}
+
 const UI = {
   presets: null,
 
@@ -60,6 +66,38 @@ const UI = {
       opt.value = String(i);
       preset.appendChild(opt);
     });
+
+    // Тяло и конфигурация
+    const fill = (id, items, labelKey) => {
+      const el = this.$(id);
+      if (!el) return;
+      el.innerHTML = "";
+      (items || []).forEach((item) => {
+        const opt = this.el("option", null, item[labelKey || "label"]);
+        opt.value = item.key;
+        if (item.description) opt.title = item.description;
+        el.appendChild(opt);
+      });
+    };
+    const extras = p.fuselage || {};
+    fill("fusShape", extras.shapes);
+    fill("tailBoom", extras.booms);
+    const lay = p.layout || {};
+    this.wingPresets = lay.wing_positions || [];
+    fill("propulsionLayout", lay.propulsion, "label");
+    fill("wingPosition", lay.wing_positions);
+    fill("tailType", lay.tail_types);
+    fill("tailPlanform", lay.tail_planforms);
+    fill("tailTipStyle", lay.tail_tip_styles);
+    fill("tailAirfoil", p.airfoils);
+    fill("tipStyle", p.tip_styles);
+    // плъзгачът на отместването: ±44% от височината на тялото
+    const limitPct = Math.round((lay.wing_offset_limit || 0.44) * 100);
+    const range = this.$("wingOffsetRange");
+    if (range) {
+      range.min = String(-limitPct);
+      range.max = String(limitPct);
+    }
 
     this.$("designsPath").textContent = "Дизайни: " + p.paths.designs;
     this.updateMissionInfo();
@@ -248,15 +286,50 @@ const UI = {
         aspect_ratio: this._num("aspectRatio"),
         taper: this._num("taper"),
         dihedral_deg: this._num("dihedral"),
+        tip_style: this.$("tipStyle").value || null,
+        tip_frac: (this._num("tipFrac") === null ? null
+          : this._num("tipFrac") / 100),
+        washout_deg: this._num("washout"),
+        winglet: {
+          // уинглетът има смисъл само при тип връх „уинглет“
+          enabled: (this.$("tipStyle").value === "winglet"
+            && (this._num("wingletHeight") || 0) > 0),
+          height_mm: this._num("wingletHeight"),
+          cant_deg: this._num("wingletCant"),
+          toe_deg: this._num("wingletToe"),
+          chord_mm: null,
+        },
         airfoil: this.$("airfoilSelect").value,
         wing_le_ratio: wingLePct === null ? 0.30 : wingLePct / 100,
       },
       tail: {
+        type: this.$("tailType").value || "conventional",
         vh: this._num("vh"),
         vv: this._num("vv"),
         tail_arm_ratio: this._num("tailArm"),
         static_margin: marginPct === null ? null : marginPct / 100,
-        airfoil: "naca0009",
+        airfoil: this.$("tailAirfoil").value || "naca0009",
+        planform: this.$("tailPlanform").value || "tapered",
+        tip_style: this.$("tailTipStyle").value || "square",
+        v_deg: this._num("vTailDeg"),
+      },
+      fuselage: {
+        length_mm: this._num("fusLength"),
+        length_ratio: this._num("fusLengthRatio"),
+        width_mm: this._num("fusWidth"),
+        height_mm: this._num("fusHeight"),
+        shape: this.$("fusShape").value || "ellipse",
+        nose_ratio: pctOrNull(this._num("fusNose")),
+        cabin_ratio: pctOrNull(this._num("fusCabin")),
+        tail_taper: pctOrNull(this._num("fusTaper")),
+        height_ratio: this._num("fusHeightRatio"),
+        tail_boom: this.$("tailBoom").value || "printed",
+        frames: this._num("fusFrames") || 0,
+      },
+      layout: {
+        propulsion: this.$("propulsionLayout").value || "tractor",
+        // отместване на крилото от средното положение, mm (+ нагоре)
+        wing_offset_mm: this._num("wingOffset"),
       },
       propulsion: {
         cells: this._num("cells") || 3,
@@ -308,17 +381,53 @@ const UI = {
     set("aspectRatio", wing.aspect_ratio);
     set("taper", wing.taper);
     set("dihedral", wing.dihedral_deg);
+    if (wing.tip_style) this.$("tipStyle").value = wing.tip_style;
+    set("tipFrac", (wing.tip_frac === null || wing.tip_frac === undefined)
+      ? null : Math.round(wing.tip_frac * 100));
+    set("washout", wing.washout_deg);
+    const wl = wing.winglet || {};
+    set("wingletHeight", wl.height_mm || null);
+    set("wingletCant", wl.cant_deg);
+    set("wingletToe", wl.toe_deg);
+    this.syncWinglet();
     set("wingLeRatio", Math.round((wing.wing_le_ratio !== undefined
       ? wing.wing_le_ratio : 0.30) * 100));
     if (wing.airfoil) this.$("airfoilSelect").value = wing.airfoil;
 
     const tail = inp.tail || {};
+    if (tail.type) this.$("tailType").value = tail.type;
+    if (tail.planform) this.$("tailPlanform").value = tail.planform;
+    if (tail.tip_style) this.$("tailTipStyle").value = tail.tip_style;
+    if (tail.airfoil) this.$("tailAirfoil").value = tail.airfoil;
     set("vh", tail.vh);
     set("vv", tail.vv);
     set("tailArm", tail.tail_arm_ratio);
+    set("vTailDeg", tail.v_deg);
     set("staticMargin", (tail.static_margin === null
       || tail.static_margin === undefined)
       ? null : Math.round(tail.static_margin * 100));
+
+    const fus = inp.fuselage || {};
+    set("fusLength", fus.length_mm);
+    set("fusLengthRatio", fus.length_ratio);
+    set("fusWidth", fus.width_mm);
+    set("fusHeight", fus.height_mm);
+    if (fus.shape) this.$("fusShape").value = fus.shape;
+    set("fusNose", fus.nose_ratio === null || fus.nose_ratio === undefined
+      ? null : Math.round(fus.nose_ratio * 100));
+    set("fusCabin", fus.cabin_ratio === null || fus.cabin_ratio === undefined
+      ? null : Math.round(fus.cabin_ratio * 100));
+    set("fusTaper", fus.tail_taper === null || fus.tail_taper === undefined
+      ? null : Math.round(fus.tail_taper * 100));
+    set("fusHeightRatio", fus.height_ratio);
+    if (fus.tail_boom) this.$("tailBoom").value = fus.tail_boom;
+    set("fusFrames", fus.frames || 0);
+
+    const lay = inp.layout || {};
+    if (lay.propulsion) this.$("propulsionLayout").value = lay.propulsion;
+    if (lay.wing_offset_mm !== null && lay.wing_offset_mm !== undefined) {
+      this.setWingOffset(lay.wing_offset_mm);
+    }
 
     const power = inp.propulsion || {};
     set("cells", power.cells || 3);
@@ -346,6 +455,31 @@ const UI = {
     this.updateMissionInfo();
     this.updateFilamentInfo();
     this.updateAirfoilInfo();
+    if (document.getElementById("tipStyle")) this.syncWinglet();
+  },
+
+  /**
+   * Уинглетът е възможен само при тип връх „Уинглет“ — тук полетата се
+   * заключват/освобождават, за да не може число в тях да включи уинглет
+   * при друг тип (ядрото също го налага).
+   */
+  syncWinglet() {
+    const tip = this.$("tipStyle");
+    const active = !!tip && tip.value === "winglet";
+    ["wingletHeight", "wingletCant", "wingletToe"].forEach((id) => {
+      const el = this.$(id);
+      if (!el) return;
+      el.disabled = !active;
+      if (el.parentElement) {
+        el.parentElement.classList.toggle("is-muted", !active);
+      }
+    });
+    const hint = this.$("wingletHint");
+    if (hint) {
+      hint.textContent = active
+        ? "Височина ~4–6 % от размаха; над 6 % торсията става риск."
+        : "Уинглетът се включва само при тип на върха „Уинглет“.";
+    }
   },
 
   togglePayloadMode() {
@@ -378,6 +512,126 @@ const UI = {
     setPh("pw", fmt(r.power_to_weight, 0));
     setPh("perimeters", r.perimeters);
     setPh("infill", r.infill);
+
+    const g = res.geometry || {};
+    const fus = g.fuselage || {};
+    const auto = fus.auto || {};
+    setPh("fusLength", fmt0(auto.length_mm));
+    setPh("fusLengthRatio", fmt(auto.length_ratio, 2));
+    setPh("fusWidth", fmt0(auto.width_mm));
+    setPh("fusHeight", fmt0(auto.height_mm));
+    setPh("fusNose", fmt(fus.nose_ratio * 100, 0));
+    setPh("fusCabin", fmt(fus.cabin_ratio * 100, 0));
+    setPh("fusTaper", fmt(fus.tail_taper * 100, 0));
+    setPh("fusHeightRatio", fmt(fus.height_ratio, 2));
+    setPh("vTailDeg", fmt((res.layout || {}).v_tail_deg, 0));
+
+    const hint = this.$("fusHint");
+    if (hint) {
+      hint.textContent = `Сега: ${fmt0(fus.length_mm)} × ` +
+        `${fmt0(fus.width_mm)} × ${fmt0(fus.height_mm)} mm, ` +
+        `обем ${fmt0(fus.volume_cm3)} cm³. Празно поле = авто; ` +
+        `нос/кабина/край задават формата.`;
+    }
+    const propHint = this.$("propulsionHint");
+    if (propHint && res.layout) {
+      propHint.textContent = res.layout.propulsion_label +
+        (res.layout.motor_count > 1
+          ? ` (${res.layout.motor_count} мотора)` : "") +
+        " — моторът се позиционира автоматично.";
+    }
+    const tailHint = this.$("tailTypeHint");
+    if (tailHint && res.layout) {
+      tailHint.textContent = res.layout.tail_type_label +
+        (res.layout.tail_type === "v_tail"
+          ? `, ъгъл ${fmt(res.layout.v_tail_deg, 0)}°` : "") + ".";
+    }
+    const planformHint = this.$("tailPlanformHint");
+    if (planformHint && res.layout) {
+      planformHint.textContent = res.layout.tail_planform_label +
+        ", " + (res.layout.tail_tip_style_label || "").toLowerCase() +
+        " · площта се запазва при смяна.";
+    }
+    const airfoilHint = this.$("tailAirfoilHint");
+    if (airfoilHint && res.geometry && res.geometry.tail_airfoil) {
+      airfoilHint.textContent = "Профил: " + res.geometry.tail_airfoil +
+        " (симетричен е най-добре за опашка).";
+    }
+    this.syncWingOffset(res);
+  },
+
+  /**
+   * Отместването на крилото: mm от средното положение.
+   *
+   * Входът е в mm (реална величина), а плъзгачът — в % от височината на
+   * тялото, за да е еднакъв за всички дизайни. Числото в полето винаги е
+   * истинската стойност, която отива към ядрото.
+   */
+  setWingOffset(mm, { silent = false } = {}) {
+    const num = this.$("wingOffset");
+    if (!num) return;
+    const value = Number(mm);
+    if (Number.isFinite(value)) num.value = String(Math.round(value));
+    else num.value = "";
+    this.syncOffsetRange();
+    if (!silent) this.updateWingOffsetLabel();
+  },
+
+  /** Плъзгачът (в %) следва числото (в mm). */
+  syncOffsetRange() {
+    const range = this.$("wingOffsetRange");
+    const num = this.$("wingOffset");
+    if (!range || !num) return;
+    const height = this._heightMm || 0;
+    const mm = Number(num.value);
+    if (!height || !Number.isFinite(mm)) {
+      range.value = "0";
+      return;
+    }
+    const pct = Math.max(Number(range.min), Math.min(Number(range.max),
+      Math.round((mm / height) * 100)));
+    range.value = String(pct);
+  },
+
+  /** Живият прочит под полето: „+28 mm = 92 % от височината“. */
+  updateWingOffsetLabel() {
+    const label = this.$("wingOffsetValue");
+    const hint = this.$("wingOffsetHint");
+    const num = this.$("wingOffset");
+    const height = this._heightMm || 0;
+    const mm = num ? Number(num.value) : NaN;
+    if (label) {
+      label.textContent = Number.isFinite(mm) && height
+        ? `${fmt(mm, 0)} mm · ${fmt((mm / height) * 100 + 50, 0)} %`
+        : "средно положение";
+    }
+    if (hint) {
+      hint.textContent = height
+        ? `Средното положение е 50 % от височината (${fmt(height / 2, 0)} mm). ` +
+          "Допустимо: ±" + fmt(height * 0.44, 0) + " mm."
+        : "Отместване от средното положение на крилото.";
+    }
+  },
+
+  /** Синхронизира полетата с резултата (след изчисляване). */
+  syncWingOffset(res) {
+    const fus = (res && res.geometry && res.geometry.fuselage) || null;
+    if (fus && fus.height_mm) this._heightMm = Number(fus.height_mm);
+    const lay = (res && res.layout) || null;
+    const num = this.$("wingOffset");
+    if (lay && num && document.activeElement !== num) {
+      if (lay.wing_offset_mm !== null && lay.wing_offset_mm !== undefined) {
+        num.value = String(Math.round(lay.wing_offset_mm));
+      }
+    }
+    this.syncOffsetRange();
+    this.updateWingOffsetLabel();
+    const hint = this.$("wingOffsetHint");
+    if (hint && lay && lay.wing_offset_desc) {
+      hint.textContent = "Крило: " + lay.wing_offset_desc + "." +
+        (lay.wing_offset_clamped
+          ? " Стойността е ограничена до ръба на тялото." : "");
+    }
   },
 
   // ------------------------------------------------------------- рендиране
@@ -513,12 +767,27 @@ const UI = {
       ["Разтежение / свиване",
         `${fmt(g.aspect_ratio, 2)} / ${fmt(g.taper, 2)}`],
       ["Диаедър", `${fmt(g.dihedral_deg, 1)}°`],
+      ["Тип на върха", (() => {
+        const el = document.getElementById("tipStyle");
+        const opt = el ? el.querySelector(`option[value="${g.tip_style}"]`) : null;
+        return opt ? opt.textContent : (g.tip_style || "square");
+      })()],
+      ["Усукване (washout)", `${fmt(g.washout_deg, 1)}°`],
       ["Профил", `${g.airfoil.name} (CL_max ${fmt(g.airfoil.cl_max, 2)})`],
       ["CL_max при Re",
         `${fmt(a.cl_max, 2)} (каталожно ${fmt(a.cl_max_catalog, 2)})`],
       ["Re в крейсер", fmt0(a.re_cruise)],
       ["L/D max", `${fmt(a.ld_max, 1)} при CL ${fmt(a.cl_at_ld_max, 2)}`],
-      ["CD0 / Oswald", `${fmt(a.cd0, 3)} / ${fmt(a.oswald, 2)}`],
+      ["CD0 / Oswald", `${fmt(a.cd0, 3)} / ${fmt(a.oswald, 2)}` +
+        (a.oswald_mission && Math.abs(a.oswald - a.oswald_mission) > 0.004
+          ? ` (мисия ${fmt(a.oswald_mission, 2)})` : "")],
+      ...(a.cl_tip_ratio
+        ? [["Натоварване на върха", `${fmt0(a.cl_tip_ratio * 100)} % от cl`]]
+        : []),
+      ...(g.winglet && g.winglet.enabled
+        ? [["Уинглет", `${fmt0(g.winglet.height_mm)} mm, ` +
+            `${fmt(g.winglet.cant_deg, 0)}°, ${fmt(g.winglet.area_dm2, 2)} dm²`]]
+        : []),
       ["Нужна мощност в крейсер", `${fmt0(a.power_required_w)} W`],
       ["Фюзелаж (Д×Ш×В)",
         `${fmt0(g.fuselage.length_mm)} × ${fmt0(g.fuselage.width_mm)} × ` +

@@ -25,7 +25,14 @@ const API = {
 
   presets() { return this.call("get_presets"); },
   compute(inputs) { return this.call("compute_design", inputs); },
-  exportReport(inputs) { return this.call("export_report", inputs); },
+  exportSolidcraft(inputs) { return this.call("export_solidcraft", inputs); },
+  exportPlan(inputs, options) {
+    return this.call("export_plan", inputs, options || {});
+  },
+  exportStep(job, index) { return this.call("export_step", job, index); },
+  exportCancel(job) { return this.call("export_cancel", job); },
+  exportState(job) { return this.call("export_state", job); },
+  exportPreview(job) { return this.call("export_preview", job); },
   saveDesign(name, inputs) { return this.call("save_design", name, inputs); },
   loadDesign(name) { return this.call("load_design", name); },
   listDesigns() { return this.call("list_designs"); },
@@ -34,6 +41,7 @@ const API = {
   openFolder(which) { return this.call("open_folder", which); },
   airfoilShape(key) { return this.call("airfoil_shape", key, 81); },
   model3d(inputs) { return this.call("get_model3d", inputs); },
+  openExport(path) { return this.call("open_export", path); },
   getSettings() { return this.call("get_settings"); },
   saveSettings(payload) { return this.call("save_settings", payload); },
   resetSettings() { return this.call("reset_settings"); },

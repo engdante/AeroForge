@@ -56,11 +56,13 @@ def filament_length_m(volume_mm3, density_ratio=1.0):
             / FILAMENT_AREA_MM2 / 1000.0)
 
 
-def _make_part(name, area_mm2, height_mm, pieces, cfg, filament):
+def _make_part(name, area_mm2, height_mm, pieces, cfg, filament,
+               extra_internal=0.0):
     """
     Изчислява обем, маса, време и цена за част с дадена повърхност.
 
     height_mm е размерът по Z на една част (за брой слоеве).
+    extra_internal добавя вътрешни елементи (шпангоути) към обема.
     """
     nozzle = float(cfg.get("nozzle", 0.4))
     perimeters = int(cfg.get("perimeters", 2))
@@ -68,7 +70,9 @@ def _make_part(name, area_mm2, height_mm, pieces, cfg, filament):
     wall = wall_thickness(perimeters, nozzle)
 
     skin_vol = area_mm2 * wall
-    volume = skin_vol * (1.0 + internal_factor(perimeters, cfg.get("infill", 15)))
+    internal = (internal_factor(perimeters, cfg.get("infill", 15))
+                + max(0.0, float(extra_internal)))
+    volume = skin_vol * (1.0 + internal)
 
     # Колко от обема е материал: плътните филаменти ≈ 1.0, разпенващите —
     # printed_density/density. Ползва се и за масата, и за филамента, и за
@@ -174,14 +178,21 @@ def estimate_airframe(geom, tail, fuselage, cfg, filament):
     wing_seg_len = semispan / max(1, wing_pieces // 2)
 
     wing_area = geom["area_m2"] * 1e6 * SKIN_EXTRA_FACTOR
+    wing_area += float(geom.get("winglet_area_m2") or 0.0) * 1e6 * SKIN_EXTRA_FACTOR
     tail_area = (tail.get("s_h_m2", 0.0) + tail.get("s_v_m2", 0.0)) * 1e6 \
         * SKIN_EXTRA_FACTOR
 
     w = float(fuselage["width_mm"])
     h = float(fuselage["height_mm"])
     L = float(fuselage["length_mm"])
-    fus_area = ellipse_perimeter(w / 2.0, h / 2.0) * L
+    # Площта идва от параметричната форма (fuselage.py); при липса на
+    # данни — старото приближение с елипса с постоянен размер.
+    fus_area = float(fuselage.get("wetted_area_mm2") or 0.0)
+    if fus_area <= 0.0:
+        fus_area = ellipse_perimeter(w / 2.0, h / 2.0) * L
     fus_pieces = max(1, int(math.ceil(L / float(bed[2]))))
+    frames = int(fuselage.get("frames", 0) or 0)
+    frames_extra = min(0.35, 0.03 * frames)
 
     parts = []
     parts.append(_make_part("Крило (2 половини)", wing_area, wing_seg_len,
@@ -190,7 +201,7 @@ def estimate_airframe(geom, tail, fuselage, cfg, filament):
         parts.append(_make_part("Опашка (стабилизатор + кил)", tail_area,
                                 semispan * 0.35, 2, cfg, filament))
     parts.append(_make_part("Фюзелаж", fus_area, L / fus_pieces,
-                            fus_pieces, cfg, filament))
+                            fus_pieces, cfg, filament, frames_extra))
     return parts
 
 

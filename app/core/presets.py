@@ -171,6 +171,12 @@ MISSIONS = {
 
 DEFAULT_MISSION = "trainer"
 
+# Геометрия на върха по подразбиране.  „Прав срез“ пази старото поведение
+# (числата на съществуващите дизайни не се променят), а проверките
+# препоръчват заоблен връх, когато има смисъл.
+DEFAULT_TIP_STYLE = "square"
+DEFAULT_WASHOUT_DEG = 1.5     # положително = усукване надолу към върха
+
 # --------------------------------------------------------------------------
 # Справочни таблици
 # --------------------------------------------------------------------------
@@ -268,5 +274,8 @@ def clamp(value, low, high):
 
 def mission(key):
     """Връща копие на пресета за мисия (fallback към DEFAULT_MISSION)."""
-    return dict(MISSIONS.get(key, MISSIONS[DEFAULT_MISSION]))
+    out = dict(MISSIONS.get(key, MISSIONS[DEFAULT_MISSION]))
+    out.setdefault("tip_style", DEFAULT_TIP_STYLE)
+    out.setdefault("washout_deg", DEFAULT_WASHOUT_DEG)
+    return out
 

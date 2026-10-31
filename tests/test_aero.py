@@ -40,6 +40,100 @@ class TestWingGeometry(unittest.TestCase):
         self.assertAlmostEqual(area, 0.30, places=9)
 
 
+class TestPlanform(unittest.TestCase):
+    def test_square_tip_keeps_the_classic_trapezoid(self):
+        g = aero.wing_geometry(0.24, 7.0, 0.75)
+        self.assertEqual(g["tip_style"], "square")
+        self.assertAlmostEqual(g["k_form"], (1 + 0.75) / 2.0, places=6)
+
+    def test_area_is_preserved_for_every_tip_style(self):
+        for style in ("square", "rounded", "upturned", "winglet"):
+            g = aero.wing_geometry(0.24, 7.0, 0.75, style, 0.10, 0.08)
+            area = g["span_m"] * g["c_root_m"] * g["k_form"]
+            self.assertAlmostEqual(area, 0.24, places=6, msg=style)
+
+    def test_rounded_tip_shortens_the_tip_chord(self):
+        square = aero.wing_geometry(0.24, 7.0, 0.75, "square")
+        rounded = aero.wing_geometry(0.24, 7.0, 0.75, "rounded", 0.10, 0.08)
+        self.assertLess(rounded["c_tip_mm"], 0.7 * square["c_tip_mm"])
+        # коренът расте, за да запази площта
+        self.assertGreater(rounded["c_root_mm"], square["c_root_mm"])
+
+    def test_tip_min_ratio_follows_the_print_wall(self):
+        self.assertLess(aero.tip_min_ratio(0.45, 200.0),
+                        aero.tip_min_ratio(5.0, 200.0))
+        self.assertAlmostEqual(aero.tip_min_ratio(0.45, 100.0), 0.15,
+                               places=6)
+
+    def test_chord_fraction_is_monotone(self):
+        prev = 2.0
+        for i in range(11):
+            c = aero.chord_fraction(i / 10.0, 0.5, "rounded", 0.2, 0.1)
+            self.assertLessEqual(c, prev + 1e-12)
+            prev = c
+
+    def test_unknown_tip_style_falls_back_to_square(self):
+        self.assertEqual(aero.tip_style_of("nonsense"), "square")
+
+
+class TestSpanAnalysis(unittest.TestCase):
+    def test_strong_taper_has_better_efficiency_than_rectangular(self):
+        rect = aero.span_analysis(aero.wing_geometry(0.24, 7.0, 1.0))
+        tapered = aero.span_analysis(aero.wing_geometry(0.24, 7.0, 0.45))
+        self.assertGreater(tapered["e"], rect["e"])
+        self.assertGreater(rect["e"], 0.6)
+
+    def test_efficiency_is_close_to_one(self):
+        g = aero.wing_geometry(0.24, 7.0, 0.45)
+        res = aero.span_analysis(g)
+        self.assertLess(res["e"], 1.05)
+        self.assertGreater(res["e"], 0.85)
+
+    def test_washout_unloads_the_tip(self):
+        g = aero.wing_geometry(0.24, 7.0, 0.60)
+        none = aero.span_analysis(g, washout_deg=0.0)
+        washed = aero.span_analysis(g, washout_deg=2.0)
+        self.assertLess(washed["cl_tip_ratio"], none["cl_tip_ratio"])
+
+    def test_dihedral_costs_a_little_efficiency(self):
+        g = aero.wing_geometry(0.24, 7.0, 0.75)
+        flat = aero.span_analysis(g, dihedral_deg=0.0)["e"]
+        up = aero.span_analysis(g, dihedral_deg=8.0)["e"]
+        self.assertLess(up, flat)
+        self.assertGreater(up, 0.97 * flat)
+
+    def test_winglet_increases_the_effective_span(self):
+        g = aero.wing_geometry(0.24, 7.0, 0.75)
+        plain = aero.span_analysis(g)
+        wl = aero.span_analysis(g, winglet={"enabled": True, "height_mm": 60,
+                                            "cant_deg": 85.0})
+        self.assertGreater(wl["e"], plain["e"])
+        self.assertGreater(wl["delta_span_ratio"], 0.0)
+
+    def test_horizontal_winglet_brings_nothing(self):
+        flat = aero.winglet_effect(60, 90, 45.0, 0.5, 1300, 150)
+        up = aero.winglet_effect(60, 90, 90.0, 0.5, 1300, 150)
+        self.assertLess(flat["delta_span_ratio"], up["delta_span_ratio"])
+
+    def test_winglet_area_and_drag_delta(self):
+        wl = aero.winglet_effect(50, 90, 85.0, 0.5, 1300, 150)
+        self.assertAlmostEqual(wl["area_m2"], 50 * 90 * 1.5 / 2 / 1e6,
+                               places=9)
+        delta = aero.winglet_cd0_delta(wl, 0.24, 0.008)
+        self.assertGreater(delta, 0.0)
+        self.assertLess(delta, 0.002)
+
+    def test_root_moment_is_near_the_elliptic_one_for_a_taper(self):
+        res = aero.span_analysis(aero.wing_geometry(0.24, 7.0, 0.45))
+        self.assertGreater(res["m_root_factor"], 0.9)
+        self.assertLess(res["m_root_factor"], 1.15)
+
+    def test_empty_geometry_returns_fallback(self):
+        res = aero.span_analysis({})
+        self.assertGreater(res["e"], 0.0)
+        self.assertEqual(res["cl_local"], [])
+
+
 class TestSpeeds(unittest.TestCase):
     def test_stall_speed_hand_calc(self):
         """m=1.2 kg, S=0.30 m², CL=1.4 → 6.76 m/s."""

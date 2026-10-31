@@ -13,6 +13,8 @@ import json
 import os
 import re
 
+from . import aero
+
 DISCLAIMER = (
     "Този отчет е изчислен с емпирични модели за RC моделизъм и НЕ е "
     "сертификационно изчисление. Преди първия полет: провери центъра на "
@@ -124,6 +126,34 @@ def build_report_markdown(res):
         % (_f(pr["time_h"], 1), _f(pr["total_mass_g"], 0),
            _f(pr["cost"], 0)))
     add("")
+
+    lay = res.get("layout") or {}
+    fus = g.get("fuselage") or {}
+    add("## 1.1 Тяло и конфигурация")
+    add("")
+    add("- Разположение на двигателите: **%s**"
+        % lay.get("propulsion_label", "—"))
+    add("- Позиция на крилото: %s"
+        % (lay.get("wing_offset_desc") or lay.get("wing_position_label", "—")))
+    add("- Опашка: %s%s"
+        % (lay.get("tail_type_label", "—"),
+           (", ъгъл %s°" % _f(lay.get("v_tail_deg"), 0)
+            if lay.get("tail_type") == "v_tail" else "")))
+    add("- Тяло: %s × %s × %s mm (Д×Ш×В), сечение %s, обем %s cm³"
+        % (_f(fus.get("length_mm"), 0), _f(fus.get("width_mm"), 0),
+           _f(fus.get("height_mm"), 0), fus.get("shape", "—"),
+           _f(fus.get("volume_cm3"), 0)))
+    add("- Стройност L/√(w·h): %s" % _f(fus.get("slenderness"), 1))
+    bay = fus.get("battery_bay_mm")
+    if bay:
+        add("- Място за батерията: %s–%s mm от носа"
+            % (_f(bay[0], 0), _f(bay[1], 0)))
+    if lay.get("v_tail"):
+        add("- V-опашка: панел %s dm² (проекции %s / %s dm²)"
+            % (_f(lay["v_tail"]["s_panel_m2"] * 100.0, 1),
+               _f(lay["v_tail"]["s_h_eff_m2"] * 100.0, 1),
+               _f(lay["v_tail"]["s_v_eff_m2"] * 100.0, 1)))
+    add("")
     if not w.get("budget_closed", True):
         add("> ⚠️ **Масовият бюджет не се затваря**: геометрията е "
             "оразмерена за %s g, а товар + конструкция = %s g (разлика "
@@ -160,6 +190,15 @@ def build_report_markdown(res):
     add("- Относително разтежение: %s, свиване: %s, диаедър: %s°"
         % (_f(g["aspect_ratio"], 1), _f(g["taper"], 2),
            _f(g["dihedral_deg"], 1)))
+    tip_label = aero.TIP_STYLES.get(g.get("tip_style", "square"), {}).get(
+        "label", g.get("tip_style", "square"))
+    add("- Връх на крилото: %s, усукване %s°, хорд на върха %s mm"
+        % (tip_label, _f(g.get("washout_deg"), 1), _f(g.get("c_tip_mm"), 0)))
+    winglet = g.get("winglet") or {}
+    if winglet.get("enabled"):
+        add("- Уинглет: височина %s mm, наклон %s°, площ %s dm² (общо)"
+            % (_f(winglet.get("height_mm"), 0), _f(winglet.get("cant_deg"), 0),
+               _f(winglet.get("area_dm2"), 2)))
     add("- CL_max: %s (каталожно %s) при Re %s на загуба на подемна сила"
         % (_f(a["cl_max"], 2), _f(a["cl_max_catalog"], 2),
            _f(a["re_stall"], 0)))
@@ -168,6 +207,15 @@ def build_report_markdown(res):
     add("- CD0: %s (CD_min на профила: %s), Oswald e: %s"
         % (_f(a["cd0"], 3), _f(a.get("cd_min_airfoil"), 3),
            _f(a["oswald"], 2)))
+    if a.get("oswald_mission") is not None:
+        add("- Oswald по мисия: %s (номинална планформа); по геометрията "
+            "на върха: %s" % (_f(a["oswald_mission"], 2),
+                              _f(a.get("e_planar"), 3)))
+    if a.get("cl_tip_ratio") is not None:
+        add("- Натоварване на върха: %s %% от средния cl"
+            % _f(100.0 * a["cl_tip_ratio"], 0))
+    if a.get("cd0_winglet"):
+        add("- Добавка от уинглета: CD0 +%s" % _f(a["cd0_winglet"], 4))
     add("- Нужна мощност в крейсер: %s W" % _f(a["power_required_w"], 0))
     add("")
 
@@ -389,6 +437,29 @@ def build_report_html(res):
         parts.append('<div class="card"><div class="k">%s</div>'
                      '<div class="v">%s</div></div>' % (_esc(k), _esc(v)))
     parts.append("</div>")
+    lay = res.get("layout") or {}
+    fus = g.get("fuselage") or {}
+    fus_rows = [
+        ("Двигатели", lay.get("propulsion_label", "—")),
+        ("Крило", lay.get("wing_position_label", "—")),
+        ("Опашка", lay.get("tail_type_label", "—")
+         + (", %s°" % _f(lay.get("v_tail_deg"), 0)
+            if lay.get("tail_type") == "v_tail" else "")),
+        ("Тяло (Д×Ш×В)", "%s × %s × %s mm"
+         % (_f(fus.get("length_mm"), 0), _f(fus.get("width_mm"), 0),
+            _f(fus.get("height_mm"), 0))),
+        ("Сечение / обем", "%s · %s cm³"
+         % (_esc(fus.get("shape", "—")), _f(fus.get("volume_cm3"), 0))),
+        ("Стройност L/√(w·h)", _f(fus.get("slenderness"), 1)),
+    ]
+    bay = fus.get("battery_bay_mm")
+    if bay:
+        fus_rows.append(("Място за батерията",
+                         "%s–%s mm от носа"
+                         % (_f(bay[0], 0), _f(bay[1], 0))))
+    parts.append("<h2>Тяло и конфигурация</h2>")
+    parts.append(_table(["Показател", "Стойност"],
+                        [[_esc(k), _esc(v)] for k, v in fus_rows]))
     if not w.get("budget_closed", True):
         parts.append('<div class="note">⚠️ <b>Масовият бюджет не се '
                      'затваря:</b> геометрията е оразмерена за %s g, а '

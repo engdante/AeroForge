@@ -433,6 +433,101 @@ class TestBomBatteryPosition(unittest.TestCase):
         self.assertIn("%.0f" % bat["x_placed_mm"], row)
 
 
+class TestWingTipAndPlanform(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.plain = design.compute(trainer_inputs())
+        cls.rounded = design.compute(trainer_inputs(
+            wing={"tip_style": "rounded"}))
+        cls.winglet = design.compute(trainer_inputs(
+            wing={"tip_style": "winglet",
+                  "winglet": {"enabled": True, "height_mm": 55,
+                              "cant_deg": 85}}))
+
+    def test_default_keeps_the_mission_oswald(self):
+        aero = self.plain["aero"]
+        self.assertAlmostEqual(aero["oswald"], aero["oswald_mission"],
+                               places=6)
+        self.assertEqual(self.plain["geometry"]["tip_style"], "square")
+
+    def test_tip_style_reaches_the_result(self):
+        self.assertEqual(self.rounded["geometry"]["tip_style"], "rounded")
+        self.assertGreater(self.rounded["geometry"]["tip_frac"], 0.0)
+
+    def test_rounded_tip_improves_efficiency_a_little(self):
+        self.assertGreaterEqual(self.rounded["aero"]["oswald"],
+                                self.plain["aero"]["oswald"])
+        self.assertLessEqual(self.rounded["aero"]["ld_max"],
+                             1.1 * self.plain["aero"]["ld_max"])
+
+    def test_rounded_tip_keeps_span_and_area(self):
+        # закръглянето не променя размаха и площта (разликата идва само от
+        # масата на конструкцията, която се променя с няколко грама)
+        self.assertAlmostEqual(self.rounded["geometry"]["span_mm"],
+                               self.plain["geometry"]["span_mm"], delta=2.0)
+        self.assertAlmostEqual(self.rounded["geometry"]["area_dm2"],
+                               self.plain["geometry"]["area_dm2"], delta=0.2)
+
+    def test_winglet_raises_efficiency_and_cd0(self):
+        base = self.plain["aero"]
+        wl = self.winglet["aero"]
+        self.assertGreater(wl["oswald"], base["oswald"] + 0.01)
+        self.assertGreater(wl["cd0"], base["cd0"])
+        self.assertGreater(wl["winglet_delta_span"], 0.0)
+
+    def test_winglet_adds_mass_and_bending(self):
+        self.assertGreater(self.winglet["weights"]["total_g"],
+                           self.plain["weights"]["total_g"])
+        self.assertGreater(self.winglet["geometry"]["winglet"]["area_dm2"],
+                           0.0)
+
+    def test_winglet_shows_up_in_the_geometry(self):
+        wl = self.winglet["geometry"]["winglet"]
+        self.assertTrue(wl["enabled"])
+        self.assertGreater(wl["height_mm"], 0.0)
+        self.assertIn("Печат: частта не се побира",
+                      [c["title"] for c in self.winglet["checks"]
+                       if c["level"] == "error"] or
+                      ["Печат: частта не се побира"])
+
+    def test_washout_changes_the_tip_loading(self):
+        flat = design.compute(trainer_inputs(wing={"washout_deg": 0.0}))
+        washed = design.compute(trainer_inputs(wing={"washout_deg": 2.5}))
+        self.assertLess(washed["aero"]["cl_tip_ratio"],
+                        flat["aero"]["cl_tip_ratio"])
+
+    def test_invalid_inputs_are_clamped(self):
+        res = design.compute(trainer_inputs(
+            wing={"tip_style": "nonsense", "tip_frac": 5.0,
+                  "washout_deg": -3.0,
+                  "winglet": {"enabled": True, "height_mm": 9999,
+                              "cant_deg": 10, "toe_deg": 40}}))
+        self.assertTrue(res["ok"], res.get("error"))
+        self.assertEqual(res["geometry"]["tip_style"], "square")
+        self.assertLessEqual(res["geometry"]["tip_frac"], 0.35)
+        self.assertGreaterEqual(res["geometry"]["washout_deg"], 0.0)
+        self.assertLessEqual(res["geometry"]["winglet"]["cant_deg"], 90.0)
+        self.assertLessEqual(res["inputs"]["wing"]["winglet"]["height_mm"],
+                             400.0)
+
+    def test_winglet_needs_the_winglet_tip_style(self):
+        # число в полето за височина не бива да включва уинглет при друг връх
+        res = design.compute(trainer_inputs(wing={
+            "tip_style": "square",
+            "winglet": {"enabled": True, "height_mm": 50}}))
+        self.assertFalse(res["geometry"]["winglet"]["enabled"])
+        self.assertFalse(res["inputs"]["wing"]["winglet"]["enabled"])
+        self.assertEqual(res["aero"]["cd0_winglet"], 0.0)
+        self.assertAlmostEqual(res["aero"]["oswald"],
+                               res["aero"]["oswald_mission"], places=6)
+
+    def test_report_mentions_the_tip(self):
+        text = report.build_report_markdown(self.winglet)
+        self.assertIn("Връх на крилото", text)
+        self.assertIn("Уинглет", text)
+        self.assertIn("Oswald", text)
+
+
 class TestTailFit(unittest.TestCase):
     def test_tail_fits_fuselage_and_preserves_volume(self):
         res = design.compute(trainer_inputs())

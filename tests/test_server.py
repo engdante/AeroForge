@@ -84,8 +84,11 @@ class TestPresetsPayload(unittest.TestCase):
         self.assertIn("ui", data["defaults"])
         self.assertIn("font", data["defaults"]["ui"])
         self.assertIn("size", data["defaults"]["ui"])
+        self.assertIn("quality", data["defaults"]["ui"])
         self.assertGreaterEqual(len(data["fonts"]), 5)
         self.assertEqual(len(data["size_range"]), 2)
+        keys = [q["key"] for q in data["quality_levels"]]
+        self.assertEqual(keys, ["low", "normal", "high", "ultra"])
 
     def test_presets_include_ui_with_css(self):
         data = server.get_presets()
@@ -140,6 +143,73 @@ class TestComputeAndExport(unittest.TestCase):
                 self.assertTrue(os.path.exists(os.path.join(folder, name)))
         finally:
             shutil.rmtree(folder, ignore_errors=True)
+
+    def test_export_plan_and_step_without_cli(self):
+        """Стъпковият RPC: подготовка + финал без SolidCraft (3MF, сечения)."""
+        plan = server.export_plan({
+            "name": "Backend план",
+            "payload": {"mode": "simple", "total_g": 500},
+            "print": {"filament": "lw_pla", "perimeters": 1, "infill": 0},
+        }, {"run": False})
+        self.assertTrue(plan["ok"], plan.get("error"))
+        folder = plan["folder"]
+        self.assertTrue(os.path.isdir(folder))
+        self.assertTrue(folder.startswith(server.EXPORT_DIR))
+        self.assertGreaterEqual(len(plan["steps"]), 4)
+        job = plan["job"]
+        try:
+            state = plan
+            for index in range(len(plan["steps"])):
+                state = server.export_step(job, index)
+                self.assertTrue(state["ok"], state.get("error"))
+            self.assertAlmostEqual(state["progress"], 100.0, places=3)
+            for rel in ("aircraft.3mf", "sections/manifest.csv",
+                        "reference.step", "README.txt",
+                        "model_manifest.json"):
+                self.assertTrue(os.path.exists(os.path.join(folder, rel)), rel)
+            self.assertIsNone(state["step"])
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
+            parent = os.path.dirname(folder)
+            if os.path.isdir(parent) and not os.listdir(parent):
+                shutil.rmtree(parent, ignore_errors=True)
+
+
+    def test_export_solidcraft_uses_the_module(self):
+        """RPC-то подава резултата към SolidCraft експорта (без да пуска CLI)."""
+        from core import solidcraft_export
+        original = solidcraft_export.export
+        captured = {}
+
+        def fake(res, base_dir, quality=None, detail=None, slugify=None,
+                 **kwargs):
+            captured.update({"base": base_dir, "quality": quality,
+                             "slugify": slugify, "ok": res.get("ok")})
+            return {"ok": True, "folder": "x", "step": None,
+                    "bodies": [], "sections": 0}
+
+        solidcraft_export.export = fake
+        try:
+            out = server.export_solidcraft({
+                "name": "SolidCraft тест",
+                "payload": {"mode": "simple", "total_g": 500},
+            })
+        finally:
+            solidcraft_export.export = original
+        self.assertTrue(out["ok"], out.get("error"))
+        self.assertEqual(captured["base"], server.EXPORT_DIR)
+        self.assertTrue(captured["ok"])
+        self.assertIsNotNone(captured["slugify"])
+
+    def test_export_cancel_is_safe_for_unknown_job(self):
+        state = server.export_cancel("няма-такава-задача")
+        self.assertFalse(state["ok"])
+        self.assertIn("error", state)
+
+    def test_open_export_rejects_paths_outside_exports(self):
+        res = server.open_export("C:\\Windows")
+        self.assertFalse(res["ok"])
+        self.assertIn("error", res)
 
 
 @unittest.skipUnless(HAS_EEL, "eel не е инсталиран")

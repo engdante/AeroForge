@@ -70,10 +70,12 @@ FONTS = [
 DEFAULT_UI = {
     "font": "segoe",
     "size": 13,      # базов размер в px (11–20)
+    "quality": "high",   # плътност на 3D модела: low / normal / high
 }
 
 UI_SIZE_MIN = 11
 UI_SIZE_MAX = 20
+UI_QUALITY_KEYS = ("low", "normal", "high", "ultra")
 
 
 def fonts():
@@ -133,6 +135,9 @@ def _merge_defaults(raw):
     except (TypeError, ValueError):
         size = DEFAULT_UI["size"]
     size = int(max(UI_SIZE_MIN, min(UI_SIZE_MAX, size)))
+    quality = str(ui.get("quality") or DEFAULT_UI["quality"]).lower()
+    if quality not in UI_QUALITY_KEYS:
+        quality = DEFAULT_UI["quality"]
 
     return {
         "print": {
@@ -158,6 +163,7 @@ def _merge_defaults(raw):
         "ui": {
             "font": font,
             "size": size,
+            "quality": quality,
         },
     }
 

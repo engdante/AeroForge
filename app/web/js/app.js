@@ -5,6 +5,7 @@ const App = {
   result: null,
   busy: false,
   paths: null,
+  lastFolder: null,
 
   async init() {
     try {
@@ -89,6 +90,8 @@ const App = {
       .addEventListener("change", () => UI.updateFilamentInfo());
     document.getElementById("airfoilSelect")
       .addEventListener("change", () => UI.updateAirfoilInfo());
+    document.getElementById("tipStyle")
+      .addEventListener("change", () => UI.syncWinglet());
 
     document.getElementById("btnAddComponent")
       .addEventListener("click", () => {
@@ -114,11 +117,56 @@ const App = {
     document.getElementById("btnSave")
       .addEventListener("click", () => this.save());
     document.getElementById("btnExport")
-      .addEventListener("click", () => this.exportReport());
+      .addEventListener("click", () => this.exportAll());
+
+    // Отместване на крилото: плъзгач (в % от височината) и число (mm)
+    const offsetRange = document.getElementById("wingOffsetRange");
+    if (offsetRange) {
+      offsetRange.addEventListener("input", () => {
+        const height = UI._heightMm || 0;
+        const mm = (Number(offsetRange.value) / 100) * height;
+        UI.setWingOffset(mm);
+        recompute();
+      });
+    }
+    document.querySelectorAll("[data-offset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const preset = (UI.wingPresets || [])
+          .find((item) => item.key === btn.dataset.offset);
+        const ratio = preset && preset.offset_ratio !== undefined
+          ? preset.offset_ratio : 0;
+        UI.setWingOffset(ratio * (UI._heightMm || 0));
+        this.compute();
+      });
+    });
     document.getElementById("btnLoad")
       .addEventListener("click", () => this.openDesigns());
     document.getElementById("btnCloseModal")
       .addEventListener("click", () => this.closeDesigns());
+    document.getElementById("btnCloseExport")
+      .addEventListener("click", () => this.closeExportPanel());
+    document.getElementById("exportModal")
+      .addEventListener("click", (event) => {
+        if (event.target.id === "exportModal") this.closeExportPanel();
+      });
+    document.getElementById("btnExportCancel")
+      .addEventListener("click", async () => {
+        this.exportCancel = true;
+        if (this.exportJob) {
+          try { await API.exportCancel(this.exportJob); } catch (err) { /* ignore */ }
+        }
+        const log = document.getElementById("exportLog");
+        if (log) {
+          log.textContent += "\n— отказ: спирам след текущата стъпка —";
+          log.scrollTop = log.scrollHeight;
+        }
+      });
+    document.getElementById("btnExportFolder")
+      .addEventListener("click", () => {
+        if (this.lastFolder) API.openExport(this.lastFolder);
+      });
+    document.getElementById("btnExportDone")
+      .addEventListener("click", () => this.closeExportPanel());
     document.getElementById("designsModal")
       .addEventListener("click", (event) => {
         if (event.target.id === "designsModal") this.closeDesigns();
@@ -130,11 +178,21 @@ const App = {
 
     const status = document.getElementById("calcStatus");
     status.style.cursor = "pointer";
-    status.title = "Двойно щракване отваря папката с отчети";
-    status.addEventListener("dblclick", () => API.openFolder("exports"));
+    status.title = "Двойно щракване отваря последната папка с файлове";
+    status.addEventListener("dblclick", () => {
+      if (this.lastFolder) {
+        API.openExport(this.lastFolder);
+      } else {
+        API.openFolder("exports");
+      }
+    });
 
     window.addEventListener("resize", debounce(() => {
-      if (this.result) UI.renderResult(this.result);
+      if (this.result) {
+        UI.renderResult(this.result);
+        Charts.fuselageSide(document.getElementById("fuselageCanvas"),
+                            this.result);
+      }
     }, 300));
   },
 
@@ -160,6 +218,7 @@ const App = {
       const res = await API.compute(inputs);
       this.result = res;
       UI.renderResult(res);
+      Charts.fuselageSide(document.getElementById("fuselageCanvas"), res);
       this.updateModel(inputs);
       status.textContent = res.ok
         ? `готово · ${new Date().toLocaleTimeString("bg-BG")}`
@@ -189,21 +248,203 @@ const App = {
     }
   },
 
-  async exportReport() {
+  /**
+   * Един експорт, на стъпки: сечения + 3MF → SolidCraft (loft + join) →
+   * STEP + 3MF + превю.
+   *
+   * Всяка стъпка е отделен RPC, за да е реален прогресът: панелът показва
+   * кой етап върви, колко е минало, колко остава и какво е готово. Отказ
+   * спира след текущата стъпка (SolidCraft не може да се прекъсне
+   * насред boolean, но следващите стъпки не се пускат).
+   */
+  async exportAll() {
+    if (this.exportRunning) return;
+    this.exportRunning = true;
+    this.exportCancel = false;
     const status = document.getElementById("calcStatus");
-    status.textContent = "записва отчет…";
+    const btn = document.getElementById("btnExport");
+    btn.disabled = true;
+    btn.textContent = "⏳ Експорт…";
+    this.openExportPanel();
+    this.setExportSummary("подготовка…");
     try {
-      const res = await API.exportReport(UI.readInputs());
-      if (res.ok) {
-        status.textContent = "отчет: " + res.paths.folder;
-        status.title = res.paths.folder + " (двойно щракване за отваряне)";
-      } else {
-        status.textContent = "грешка: " + res.error;
+      let res = await API.exportPlan(UI.readInputs(), this.exportOptions());
+      if (!res || !res.ok) {
+        this.setExportSummary("грешка: " +
+          ((res && res.error) || "неуспешен експорт"));
+        status.textContent = "грешка при експорт";
+        return;
+      }
+      this.exportJob = res.job;
+      this.lastFolder = res.folder;
+      this.renderExportState(res);
+      const total = (res.steps || []).length;
+      for (let i = 0; i < total; i += 1) {
+        if (this.exportCancel) break;
+        this.markExportStep(i);
+        res = await API.exportStep(this.exportJob, i);
+        if (!res || !res.ok) {
+          this.setExportSummary("грешка: " +
+            ((res && res.error) || "стъпката се провали"));
+          break;
+        }
+        this.renderExportState(res);
+        const step = (res.steps || [])[i];
+        status.textContent = `експорт ${i + 1}/${total}` +
+          (step ? `: ${step.label}` : "");
+      }
+      if (res && res.ok) {
+        await this.finishExportPanel(res);
+        status.textContent = this.exportCancel
+          ? "експортът е отказан"
+          : `модел: ${(res.bodies || []).length} тела · ` +
+            `${res.step ? "STEP" : "без STEP"}` +
+            `${res.three_mf ? " + 3MF" : ""} → ${res.folder}`;
       }
     } catch (err) {
-      status.textContent = err.message;
+      this.setExportSummary("грешка: " + err.message);
+    } finally {
+      this.exportRunning = false;
+      btn.disabled = false;
+      btn.textContent = "📤 Експорт";
     }
   },
+
+  /** Опции на експорта (по подразбиране: SolidCraft + 3MF + дизайн). */
+  exportOptions() {
+    return {
+      run: true,
+      split: true,
+      exact_tail: false,
+      join_tail: false,     // стабилизаторът остава отделно тяло (boolean виси)
+      quality_3mf: "fine",
+      save_design: true,
+    };
+  },
+
+  openExportPanel() {
+    const modal = document.getElementById("exportModal");
+    if (!modal) return;
+    modal.classList.remove("hidden");
+    document.getElementById("exportResult").classList.add("hidden");
+    document.getElementById("exportLog").textContent = "";
+    document.getElementById("exportBar").style.width = "0%";
+    document.getElementById("exportSteps").innerHTML = "";
+    document.getElementById("btnExportCancel").disabled = false;
+    document.getElementById("btnExportFolder").disabled = true;
+    document.getElementById("btnExportDone").disabled = true;
+  },
+
+  closeExportPanel() {
+    const modal = document.getElementById("exportModal");
+    if (modal) modal.classList.add("hidden");
+  },
+
+  setExportSummary(text, time) {
+    const el = document.getElementById("exportSummary");
+    if (el) el.textContent = text;
+    const timeEl = document.getElementById("exportTime");
+    if (timeEl && time !== undefined) timeEl.textContent = time;
+  },
+  /** Маркира текущата стъпка като „работи“ още преди отговора на RPC-то. */
+  markExportStep(index) {
+    document.querySelectorAll("#exportSteps li").forEach((li, i) => {
+      li.classList.toggle("running", i === index);
+      if (i === index) {
+        const mark = li.querySelector(".mark");
+        if (mark) mark.textContent = "⟳";
+      }
+    });
+  },
+
+  /** Рисува състоянието от backend-а: чеклист, бар, лог, времена. */
+  renderExportState(res) {
+    const steps = res.steps || [];
+    const list = document.getElementById("exportSteps");
+    const marks = { pending: "·", running: "⟳", done: "✓", skipped: "!",
+                    error: "✕" };
+    if (list) {
+      list.innerHTML = "";
+      steps.forEach((step) => {
+        const li = UI.el("li", step.state);
+        li.appendChild(UI.el("span", "mark", marks[step.state] || "·"));
+        li.appendChild(UI.el("span", "label", step.label));
+        const meta = step.error
+          ? step.error
+          : [step.detail,
+             step.ms ? `${(step.ms / 1000).toFixed(1)} s` : null]
+            .filter(Boolean).join(" · ");
+        li.appendChild(UI.el("span", "meta", meta || ""));
+        if (step.error) li.title = step.error;
+        list.appendChild(li);
+      });
+    }
+    const bar = document.getElementById("exportBar");
+    if (bar) bar.style.width = `${Math.round(res.progress || 0)}%`;
+    const parts = [`${(res.bodies || []).length} тела`,
+                   `${res.sections || 0} сечения`];
+    if ((res.joins || []).length) parts.push(`${res.joins.length} join`);
+    this.setExportSummary(parts.join(" · "),
+      `изтекло ${Math.round(res.elapsed_s || 0)} s` +
+      (res.eta_s ? ` · остават ~${Math.round(res.eta_s)} s` : ""));
+    const log = document.getElementById("exportLog");
+    if (log && res.log) {
+      log.textContent = res.log
+        .map((row) => `${String(row.t).padStart(5)} s  ${row.text}`)
+        .join("\n");
+      log.scrollTop = log.scrollHeight;
+    }
+  },
+
+  /** След последната стъпка: резюме, превю, бутони. */
+  async finishExportPanel(res) {
+    const box = document.getElementById("exportResult");
+    if (!box) return;
+    box.innerHTML = "";
+    box.classList.remove("hidden");
+    const files = res.files || {};
+    const lines = [];
+    if (files.aircraft_step) {
+      lines.push("aircraft.step — solid, " +
+        (files.aircraft_step.bytes / 1e6).toFixed(1) + " MB");
+    }
+    const mesh = files.aircraft_3mf || {};
+    if (mesh.path) {
+      lines.push("aircraft.3mf — мрежа, " +
+        (mesh.bytes / 1e6).toFixed(2) + " MB" +
+        (mesh.source === "solidcraft" ? " (от solid-а)" : " (от мрежата)"));
+    }
+    if (files.aircraft_design) {
+      lines.push("aircraft.sc — дизайн за редакция, " +
+        (files.aircraft_design.bytes / 1e6).toFixed(1) + " MB");
+    }
+    if (files.preview) lines.push("preview.png — iso изглед");
+    const evalInfo = res.eval || null;
+    if (evalInfo && evalInfo.body_count !== undefined) {
+      const closed = (evalInfo.bodies || []).filter((b) => b.closed).length;
+      lines.push("тела в STEP: " + evalInfo.body_count +
+        ", затворени: " + closed);
+    }
+    const filesBox = UI.el("div", "files");
+    lines.forEach((text) => filesBox.appendChild(UI.el("div", null, text)));
+    if (res.warning) filesBox.appendChild(UI.el("div", "warn", "⚠ " + res.warning));
+    filesBox.appendChild(UI.el("div", "hint", res.folder));
+    box.appendChild(filesBox);
+    if (res.preview) {
+      const img = document.createElement("img");
+      img.alt = "превю на модела";
+      try {
+        const url = await API.exportPreview(res.job);
+        if (url) img.src = url;
+      } catch (err) { /* превюто не е критично */ }
+      box.appendChild(img);
+    }
+    document.getElementById("btnExportCancel").disabled = true;
+    document.getElementById("btnExportFolder").disabled = false;
+    document.getElementById("btnExportDone").disabled = false;
+  },
+
+
 
   async openDesigns() {
     const modal = document.getElementById("designsModal");
@@ -286,7 +527,11 @@ const App = {
       },
       wing: {
         wing_loading: null, aspect_ratio: null, taper: null,
-        dihedral_deg: null, airfoil: "naca2412", wing_le_ratio: 0.30,
+        dihedral_deg: null, tip_style: null, tip_frac: null,
+        washout_deg: null,
+        winglet: { enabled: false, height_mm: null, cant_deg: 85, toe_deg: 0,
+                   chord_mm: null },
+        airfoil: "naca2412", wing_le_ratio: 0.30,
       },
       tail: {
         vh: null, vv: null, tail_arm_ratio: null, static_margin: null,

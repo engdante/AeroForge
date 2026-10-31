@@ -24,9 +24,16 @@ CARBON_E_MPA = 90000.0
 DEFLECTION_LIMIT_RATIO = 0.08  # % от полуразмаха
 
 
-def root_bending_moment(mass_kg, span_m, n_limit):
-    """Коренов огъващ момент за конзолно крило [N·m]."""
-    return ROOT_MOMENT_COEFF * float(n_limit) * mass_kg * G * span_m
+def root_bending_moment(mass_kg, span_m, n_limit, load_factor=1.0):
+    """
+    Коренов огъващ момент за конзолно крило [N·m].
+
+    load_factor идва от разпределението на подемната сила (виж
+    aero.span_analysis): 1.0 = елиптично, >1 при уинглет или силно
+    свиване.  Така уинглетът реално товари спа̀ра, вместо да е безплатен.
+    """
+    return (ROOT_MOMENT_COEFF * float(load_factor) * float(n_limit)
+            * mass_kg * G * span_m)
 
 
 def spar_height_mm(c_root_mm, thickness_ratio, factor=0.85):
@@ -93,7 +100,8 @@ def analyse(mass_kg, geom, filament, mission, airfoil_key,
     n = presets.clamp(n, 1.5, 15.0)
     sf = max(1.0, float(safety_factor))
 
-    m_root = root_bending_moment(mass_kg, geom["span_m"], n)
+    m_root = root_bending_moment(mass_kg, geom["span_m"], n,
+                                 geom.get("bending_factor", 1.0))
     m_ult = m_root * sf
 
     t_ratio = airfoils.thickness_of(airfoil_key)

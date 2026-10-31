@@ -14,13 +14,18 @@ import sys
 
 import eel
 
+from core import aero
 from core import airfoils
 from core import design as design_mod
+from core import fuselage
 from core import geometry3d
+from core import layout
 from core import materials
+from core import export_job
 from core import presets
 from core import report
 from core import settings as app_settings
+from core import solidcraft_export
 from core import weight
 
 # На Windows конзолата е cp1251 — иначе print с кирилица/emoji гърми
@@ -93,10 +98,28 @@ def get_presets():
         "missions": missions,
         "filaments": materials.list_filaments(),
         "airfoils": airfoils.list_airfoils(),
+        "tip_styles": aero.list_tip_styles(),
+        "quality_levels": geometry3d.quality_levels(),
         "categories": categories,
         "defaults": design_mod.default_inputs(),
         "battery_capacities": presets.BATTERY_CAPACITIES_MAH,
         "prop_sizes": sorted(presets.PROP_MASS_G.keys()),
+        "fuselage": {
+            "shapes": fuselage.list_shapes(),
+            "booms": fuselage.list_booms(),
+            "defaults": dict(fuselage.DEFAULT),
+        },
+        "layout": {
+            "propulsion": layout.list_propulsion(),
+            "wing_positions": layout.list_wing_positions(),
+            "tail_types": layout.list_tail_types(),
+            "tail_planforms": [{"key": key, "label": value["label"],
+                                "description": value["description"]}
+                               for key, value in aero.TAIL_PLANFORMS.items()],
+            "tail_tip_styles": [{"key": key, "label": value["label"]}
+                                for key, value in aero.TAIL_TIP_STYLES.items()],
+            "wing_offset_limit": layout.WING_OFFSET_LIMIT,
+        },
         "paths": {"designs": DESIGN_DIR, "exports": EXPORT_DIR},
         "component_presets": [
             {"name": "Мотор 2212 1400Kv", "category": "motor",
@@ -173,7 +196,10 @@ def _shape_payload(coords, approximate, key):
 @eel.expose
 def get_settings():
     """Каталог на филаментите + базови стойности."""
-    return app_settings.get_settings()
+    payload = app_settings.get_settings()
+    # нивата за качество на 3D модела идват от geometry3d (един източник)
+    payload["quality_levels"] = geometry3d.quality_levels()
+    return payload
 
 
 @eel.expose
@@ -237,7 +263,102 @@ def get_model3d(inputs):
     if not res.get("ok"):
         return res
     try:
-        return geometry3d.build_model(res)
+        quality = app_settings.get_ui().get("quality")
+        return geometry3d.build_model(res, quality=quality)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+
+
+@eel.expose
+def export_plan(inputs, options=None):
+    """
+    Подготвя експорта (без SolidCraft): папка, сечения, 3MF от мрежата.
+
+    Връща задача (`job`) и списък стъпки с оценка, за да може панелът да
+    покаже какво предстои още преди първото чакане.
+    """
+    res = compute_design(inputs)
+    if not res.get("ok"):
+        return res
+    try:
+        opts = dict(options or {})
+        opts.setdefault("run", True)
+        return export_job.start(
+            res, EXPORT_DIR,
+            quality=app_settings.get_ui().get("quality"),
+            slugify=report.slugify, options=opts)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+
+
+@eel.expose
+def export_step(job, index=None):
+    """Изпълнява една стъпка от експорта и връща новото състояние."""
+    try:
+        return export_job.run_step(job, index)
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        return {"ok": False, "error": "%s: %s" % (type(exc).__name__, exc)}
+
+
+@eel.expose
+def export_cancel(job):
+    """Отказва експорта (текущата стъпка се довършва, следващите — не)."""
+    return export_job.cancel(job)
+
+
+@eel.expose
+def export_state(job):
+    """Състоянието на задачата (за възстановяване на панела)."""
+    return export_job.current(job)
+
+
+@eel.expose
+def export_preview(job):
+    """
+    PNG превю на готовия модел като data URL (за панела на експорта).
+
+    Браузърът не може да отвори `file://` от страницата на Eel, затова
+    картинката се връща като base64 — само за файл в папката на експорта.
+    """
+    import base64
+    item = export_job.current(job)
+    path = item.get("preview")
+    if not path or not os.path.exists(path):
+        return None
+    root = os.path.abspath(EXPORT_DIR)
+    if not os.path.abspath(path).startswith(root):
+        return None
+    try:
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode("ascii")
+    except OSError:
+        return None
+    return "data:image/png;base64," + data
+
+
+@eel.expose
+def export_solidcraft(inputs, options=None):
+    """
+    Синхронен експорт (същите стъпки, без междинен прогрес).
+
+    Ползва се от скриптове и тестове; UI-ят вика `export_plan` +
+    `export_step`, за да показва прогрес.
+    """
+    res = compute_design(inputs)
+    if not res.get("ok"):
+        return res
+    try:
+        opts = dict(options or {})
+        return solidcraft_export.export(
+            res, EXPORT_DIR,
+            quality=app_settings.get_ui().get("quality"),
+            slugify=report.slugify, options=opts)
     except Exception as exc:  # noqa: BLE001
         import traceback
         traceback.print_exc()
@@ -340,10 +461,37 @@ def open_folder(which="exports"):
         return {"ok": False, "error": str(exc)}
 
 
+@eel.expose
+def open_export(path):
+    """
+    Отваря конкретна папка от exports/ (за „намери файловете“).
+
+    Приема се само път вътре в EXPORT_DIR — не произволен от браузъра.
+    """
+    base = os.path.abspath(EXPORT_DIR)
+    target = os.path.abspath(str(path or ""))
+    if not target.startswith(base):
+        return {"ok": False, "error": "пътят е извън папката с отчети"}
+    if not os.path.isdir(target):
+        return {"ok": False, "error": "няма такава папка: %s" % target}
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(target)  # noqa: S606
+        else:
+            import subprocess
+            subprocess.Popen(["xdg-open", target])
+        return {"ok": True, "path": target}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
 def main():
     print("AeroForge %s" % design_mod.VERSION)
     print("Папка с дизайни: %s" % DESIGN_DIR)
     print("Папка с отчети:  %s" % EXPORT_DIR)
+    cli = solidcraft_export.find_cli()
+    print("SolidCraft CLI:  %s" % (
+        cli or "не е намерен — експортът ще записва само скрипта и SVG-ите"))
     port = 0
     for arg in sys.argv[1:]:
         try:

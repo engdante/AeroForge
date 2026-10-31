@@ -51,12 +51,13 @@ def _num(value, default=0.0):
     return number
 
 
-def normalize_component(comp, fus_len_mm=0.0, index=0):
+def normalize_component(comp, fus_len_mm=0.0, index=0, positions=None):
     """
     Привежда компонент от UI към вътрешен формат.
 
     x_mm (позиция от носа) може да се зададе ръчно; иначе се взима
-    разумна стойност по категория.
+    разумна стойност по категория. `positions` (категория → mm) идва от
+    layout.py и отразява избраното разположение на двигателите.
     """
     category = comp.get("category") or "other"
     if category not in CATEGORIES:
@@ -66,8 +67,11 @@ def normalize_component(comp, fus_len_mm=0.0, index=0):
                max(0.0, _num(comp.get("unit_mass_g"), 0.0)))
     x_raw = comp.get("x_mm")
     if x_raw is None or x_raw == "":
-        frac = DEFAULT_X_FRACTION.get(category, 0.40)
-        x_mm = frac * fus_len_mm
+        if positions and category in positions:
+            x_mm = max(0.0, float(positions[category]))
+        else:
+            frac = DEFAULT_X_FRACTION.get(category, 0.40)
+            x_mm = frac * fus_len_mm
         auto_x = True
     else:
         x_mm = min(MAX_MANUAL_X_MM, max(0.0, _num(x_raw, 0.0)))
@@ -112,7 +116,8 @@ def provided_categories(components):
         or float(c.get("unit_mass_g", 0.0) or 0.0) > 0.0)
 
 
-def airframe_items(airframe_g, fus_len_mm, wing_le_mm, mac_mm, has_tail=True):
+def airframe_items(airframe_g, fus_len_mm, wing_le_mm, mac_mm, has_tail=True,
+                   tail_boom="printed"):
     """
     Разпределя масата на конструкцията по секции (за ЦТ и за графиката).
 
@@ -120,6 +125,9 @@ def airframe_items(airframe_g, fus_len_mm, wing_le_mm, mac_mm, has_tail=True):
     фюзелажът е по-тежък в носовата част (оборудване, моторна планка),
     а опашната част е лека тръба. Тегловни дялове: крило 42%, носова част
     на фюзелажа 24%, задна част 16%, опашка 18%.
+
+    При карбонова тръба (boom) опашната част е значително по-лека —
+    дяловете се преразпределят към носовата част на тялото.
     """
     if not has_tail:
         return [
@@ -129,16 +137,20 @@ def airframe_items(airframe_g, fus_len_mm, wing_le_mm, mac_mm, has_tail=True):
             {"name": "Гърбица/фюзелаж (конструкция)", "category": "airframe",
              "mass_g": 0.15 * airframe_g, "x_mm": 0.30 * fus_len_mm},
         ]
+    shares = (0.42, 0.24, 0.16, 0.18)
+    if str(tail_boom or "printed").lower() == "carbon_tube":
+        # тръбата е лека: опашката пада на 12%, носът поема разликата
+        shares = (0.42, 0.28, 0.18, 0.12)
     return [
         {"name": "Крило (конструкция)", "category": "airframe",
-         "mass_g": 0.42 * airframe_g,
+         "mass_g": shares[0] * airframe_g,
          "x_mm": wing_le_mm + 0.45 * mac_mm},
         {"name": "Фюзелаж — носова част", "category": "airframe",
-         "mass_g": 0.24 * airframe_g, "x_mm": 0.28 * fus_len_mm},
+         "mass_g": shares[1] * airframe_g, "x_mm": 0.28 * fus_len_mm},
         {"name": "Фюзелаж — задна част", "category": "airframe",
-         "mass_g": 0.16 * airframe_g, "x_mm": 0.72 * fus_len_mm},
+         "mass_g": shares[2] * airframe_g, "x_mm": 0.72 * fus_len_mm},
         {"name": "Опашка (конструкция)", "category": "airframe",
-         "mass_g": 0.18 * airframe_g, "x_mm": 0.92 * fus_len_mm},
+         "mass_g": shares[3] * airframe_g, "x_mm": 0.92 * fus_len_mm},
     ]
 
 
