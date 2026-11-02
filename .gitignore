@@ -31,3 +31,8 @@ desktop.ini
 # ---- локални временни файлове ----
 *.log
 tmp/
+/_check_*.py
+/_fix_*.py
+/_test_*.py
+/_run_output.txt
+/_stale/
