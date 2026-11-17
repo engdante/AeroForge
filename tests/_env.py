@@ -26,3 +26,8 @@ try:
 except OSError:
     pass
 settings.load()
+
+# „Допълнения“ (tools/extras.json, tools/solidcraft) — също във временна папка
+from core import extras  # noqa: E402
+
+extras.TOOLS_DIR = os.path.join(tempfile.gettempdir(), "aeroforge_tests_tools")

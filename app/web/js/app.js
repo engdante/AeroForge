@@ -24,6 +24,8 @@ const App = {
     Settings.bind();
     Viewer.init();
     UI.loadPropellers();
+    // допълненията (APC витла, SolidCraft) — не спират приложението
+    Extras.init().catch((err) => console.warn("Допълнения:", err));
     document.querySelectorAll(".viewer-bar [data-view]").forEach((btn) => {
       btn.addEventListener("click", () => Viewer.setView(btn.dataset.view));
     });

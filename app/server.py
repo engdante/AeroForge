@@ -27,6 +27,7 @@ from core import printgeom
 from core import profiles
 from core import catalog as catalog_mod
 from core import controls
+from core import extras
 from core import motor
 from core import propeller as propeller_mod
 from core import report
@@ -110,6 +111,8 @@ def get_presets():
         "defaults": design_mod.default_inputs(),
         "battery_capacities": presets.BATTERY_CAPACITIES_MAH,
         "prop_sizes": sorted(presets.PROP_MASS_G.keys()),
+        "motor_classes": [dict(c, mount=list(c["mount"]))
+                          for c in motor.MOTOR_CLASSES],
         "fuselage": {
             "shapes": fuselage.list_shapes(),
             "booms": fuselage.list_booms(),
@@ -644,6 +647,55 @@ def save_catalog(payload):
         return {"ok": True, **catalog_mod.effective()}
     except (ValueError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
+
+
+# --------------------------------------------------------------------------
+# Допълнения: APC витла и SolidCraft (изтегляне/път) — виж core/extras.py
+# --------------------------------------------------------------------------
+@eel.expose
+def extras_status():
+    try:
+        return {"ok": True, **extras.status(PROP_DIR)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+@eel.expose
+def extras_install_apc():
+    started = extras.install_apc(PROP_DIR)
+    return {"ok": True, "started": started, "progress": extras.progress()}
+
+
+@eel.expose
+def extras_solidcraft_latest():
+    """Последната версия на SolidCraft в GitHub за тази платформа."""
+    try:
+        return {"ok": True, **extras.latest_solidcraft()}
+    except Exception as exc:  # noqa: BLE001 — мрежата може да липсва
+        return {"ok": False, "error": str(exc)}
+
+
+@eel.expose
+def extras_install_solidcraft(url=None):
+    """Без адрес — последната версия от GitHub (SHA-256); с адрес — архивът."""
+    try:
+        started = extras.install_solidcraft(url or None)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    return {"ok": True, "started": started, "progress": extras.progress()}
+
+
+@eel.expose
+def extras_set_cli(path):
+    try:
+        return {"ok": True, "cli": extras.set_cli_path(path)}
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@eel.expose
+def extras_progress():
+    return {"ok": True, "progress": extras.progress()}
 
 
 @eel.expose

@@ -169,5 +169,68 @@ class TestMotorDetailed(unittest.TestCase):
         self.assertIn("REF_Prop_1_Blade_1", loose["bodies"])
 
 
+class TestManualMotor(unittest.TestCase):
+    def manual(self, motor_in, mode="simple"):
+        case = dict(BASE, mission="trainer",
+                    propulsion={"motor": motor_in})
+        if mode == "components":
+            case["payload"] = {"mode": "components", "components": [
+                {"name": "Батерия", "category": "battery", "qty": 1,
+                 "unit_mass_g": 180}]}
+        return design.compute(case)
+
+    def test_auto_has_no_input_key(self):
+        res = compute("trainer")
+        self.assertNotIn("motor", res["inputs"]["propulsion"])
+        self.assertIsNone(motor.normalize_input({"size": "9999"}))
+
+    def test_chosen_class_drives_geometry(self):
+        res = self.manual({"size": "2826"})
+        self.assertEqual(motor.select(res)["key"], "2826")
+        self.assertTrue(motor.select(res)["manual"])
+        lay = motor.layout(res)
+        spin = fairing.spinner_params(res)
+        self.assertGreaterEqual(spin["radius"], 0.5 * 35.0)
+        unit = lay["units"][0]
+        self.assertAlmostEqual(unit["x_can1"] - unit["x_can0"], 30.0)
+
+    def test_custom_dimensions_and_clamps(self):
+        res = self.manual({"size": "custom", "can_d_mm": 40, "can_l_mm": 20,
+                           "shaft_d_mm": 4, "mount_mm": [25, 19],
+                           "mass_g": 99999, "kv": 900})
+        cls = motor.select(res)
+        self.assertEqual(cls["can_d"], 40.0)
+        self.assertEqual(cls["mount"], (19.0, 25.0))
+        self.assertEqual(cls["mass_g"], motor.LIMITS["mass_g"][1])
+        script = dm.build_script(res, None, sc.DEFAULT_DETAIL)
+        cans = [c for c in script["commands"]
+                if c["params"].get("name") == "REF_Motor_1"]
+        self.assertAlmostEqual(cans[0]["params"]["diameter"], 40.0)
+
+    def test_mass_used_in_components_mode(self):
+        res = self.manual({"size": "2826", "mass_g": 111}, mode="components")
+        items = [c for c in res["weights"].get("items", res["weights"].get(
+            "components", [])) if c.get("category") == "motor"]
+        if not items:   # различни версии на структурата на теглата
+            items = [c for c in res["bom"].get("items", [])
+                     if c.get("category") == "motor"]
+        self.assertTrue(items)
+        self.assertAlmostEqual(items[0]["unit_mass_g"], 111.0)
+
+    def test_checks_for_kv_and_power(self):
+        rec_kv = compute("trainer")["propulsion"]["kv"]
+        high = self.manual({"size": "2212", "kv": rec_kv * 2.0})
+        titles = [c["title"] for c in high["checks"]]
+        self.assertIn("Kv на мотора е висок за витлото", titles)
+        low = self.manual({"size": "2212", "kv": rec_kv * 0.6})
+        self.assertIn("Kv на мотора е нисък за витлото",
+                      [c["title"] for c in low["checks"]])
+        ok = self.manual({"size": "2212", "kv": rec_kv})
+        self.assertFalse([c for c in ok["checks"] if "Kv" in c["title"]])
+        weak = self.manual({"size": "2204"})
+        levels = {c["title"]: c["level"] for c in weak["checks"]}
+        self.assertTrue(any("слаб" in t or "малък" in t for t in levels))
+
+
 if __name__ == "__main__":
     unittest.main()

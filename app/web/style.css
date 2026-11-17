@@ -813,3 +813,29 @@ canvas { background: #121821; border: 1px solid var(--line); border-radius: 6px;
 .block h3.collapsible::after { content: " ▾"; color: #5d7d99; }
 .block.collapsed h3.collapsible::after { content: " ▸"; }
 .block.collapsed > :not(h3) { display: none; }
+
+
+/* ---- Допълнения ---- */
+.badge-dot { display: inline-block; width: 8px; height: 8px; margin-left: 6px;
+  border-radius: 50%; background: var(--warn, #f0b24a); vertical-align: middle; }
+.badge-dot.hidden { display: none; }
+.extras-box { width: min(760px, 94vw); }
+.extra-card h4 { display: flex; align-items: center; gap: 8px; }
+.extra-state { font-size: 0.85em; padding: 1px 8px; border-radius: 10px;
+  background: rgba(240, 178, 74, 0.18); color: var(--warn, #f0b24a); }
+.extra-state.ok { background: rgba(80, 200, 120, 0.18); color: #5fd38a; }
+.inline-field { display: flex; gap: 8px; }
+.inline-field input { flex: 1; min-width: 0; }
+.extra-progress { height: 6px; border-radius: 3px; overflow: hidden;
+  background: rgba(255, 255, 255, 0.08); margin-top: 8px; }
+.extra-progress.hidden { display: none; }
+.extra-progress .bar { height: 100%; width: 0; background: var(--accent, #4db3e6);
+  transition: width 0.3s; }
+.extra-progress.indeterminate .bar { width: 35%; animation: extraSlide 1.2s
+  ease-in-out infinite; }
+@keyframes extraSlide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+.extras-box .extra-card { margin-top: 12px; }
+.extra-more { margin-top: 10px; }
+.extra-more summary { cursor: pointer; color: var(--muted, #8fa3b8); }
+.extra-more[open] summary { margin-bottom: 8px; }
+.extras-box a { color: var(--accent); }

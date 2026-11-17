@@ -54,6 +54,14 @@ const API = {
     return this.call("propeller_summary", name, rpm, material, infill, bed);
   },
   propellerStl(name) { return this.call("export_propeller_stl", name); },
+  extrasStatus() { return this.call("extras_status"); },
+  extrasInstallApc() { return this.call("extras_install_apc"); },
+  extrasInstallSolidcraft(url) {
+    return this.call("extras_install_solidcraft", url || null);
+  },
+  extrasSolidcraftLatest() { return this.call("extras_solidcraft_latest"); },
+  extrasSetCli(path) { return this.call("extras_set_cli", path); },
+  extrasProgress() { return this.call("extras_progress"); },
 };
 
 /** Форматира число с фиксирани знаци; null/undefined -> „—“ */

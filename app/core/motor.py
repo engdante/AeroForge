@@ -63,15 +63,101 @@ def _num(value, default=0.0):
         return default
 
 
-def select(res):
-    """Класът на мотора за дизайна (dict от MOTOR_CLASSES + "reason") или None."""
-    p = (res or {}).get("propulsion") or {}
-    power = _num(p.get("p_motor_elec_w") or p.get("p_max_elec_w"))
-    if power <= 0 or _num(p.get("prop_d_in")) <= 0:
+CUSTOM = "custom"
+KV_TOLERANCE = 0.15       # ±15 % от препоръчания kV — без предупреждение
+# граници за ръчния вход (защита от грешно въведени числа)
+LIMITS = {"kv": (50.0, 5000.0), "mass_g": (5.0, 2000.0),
+          "p_max_w": (20.0, 5000.0), "can_d_mm": (10.0, 80.0),
+          "can_l_mm": (5.0, 100.0), "shaft_d_mm": (1.5, 12.0),
+          "mount_mm": (8.0, 60.0)}
+
+
+def class_by_key(key):
+    return next((c for c in MOTOR_CLASSES if c["key"] == key), None)
+
+
+def _clamped(value, key):
+    v = _num(value, None)
+    if v is None or v <= 0:
         return None
-    torque = torque_nm(res)
+    lo, hi = LIMITS[key]
+    return min(hi, max(lo, v))
+
+
+def normalize_input(raw):
+    """
+    Ръчно избран мотор (или None = автоматичен избор).
+
+    {"size": ключ от MOTOR_CLASSES или "custom", "kv", "mass_g", "p_max_w",
+     за "custom" и: "can_d_mm", "can_l_mm", "shaft_d_mm", "mount_mm": [a, b]}
+    Празните полета вземат стойностите на класа.
+    """
+    raw = raw if isinstance(raw, dict) else {}
+    size = str(raw.get("size") or "").strip()
+    if not size or (size != CUSTOM and not class_by_key(size)):
+        return None
+    out = {"size": size}
+    for key in ("kv", "mass_g", "p_max_w", "can_d_mm", "can_l_mm", "shaft_d_mm"):
+        value = _clamped(raw.get(key), key)
+        if value is not None:
+            out[key] = value
+    mount = raw.get("mount_mm")
+    if isinstance(mount, (list, tuple)):
+        vals = [_clamped(m, "mount_mm") for m in mount[:2]]
+        vals = [v for v in vals if v is not None]
+        if vals:
+            out["mount_mm"] = sorted(vals if len(vals) == 2 else vals * 2)
+    return out
+
+
+def _nearest_class(can_d):
+    return min(MOTOR_CLASSES, key=lambda c: abs(c["can_d"] - can_d))
+
+
+def manual_class(motor_in):
+    """Класът на ръчно избрания мотор (dict като MOTOR_CLASSES) или None."""
+    m = normalize_input(motor_in)
+    if not m:
+        return None
+    if m["size"] == CUSTOM:
+        base = dict(_nearest_class(m.get("can_d_mm") or 27.5))
+        base["key"] = "свой"
+    else:
+        base = dict(class_by_key(m["size"]))
+    can_d0, can_l0 = base["can_d"], base["can_l"]
+    base["can_d"] = m.get("can_d_mm", base["can_d"])
+    base["can_l"] = m.get("can_l_mm", base["can_l"])
+    base["shaft_d"] = m.get("shaft_d_mm", base["shaft_d"])
+    if "mount_mm" in m:
+        base["mount"] = tuple(m["mount_mm"])
+    # моментът расте с обема на статора (≈ D²·L)
+    scale = (base["can_d"] / can_d0) ** 2 * (base["can_l"] / can_l0)
+    base["q_max_nm"] = base["q_max_nm"] * scale
+    if m["size"] == CUSTOM:
+        base["mass_g"] = base["mass_g"] * scale
+        base["p_max_w"] = base["p_max_w"] * scale
+    base["mass_g"] = m.get("mass_g", base["mass_g"])
+    base["p_max_w"] = m.get("p_max_w", base["p_max_w"])
+    base["kv"] = m.get("kv")
+    base["manual"] = True
+    base["reason"] = "избран ръчно"
+    return base
+
+
+def manual_mass_g(motor_in):
+    cls = manual_class(motor_in)
+    return cls["mass_g"] if cls else None
+
+
+def recommended(spec):
+    """Препоръчаният клас по мощност и момент (spec = res["propulsion"])."""
+    power = _num(spec.get("p_motor_elec_w") or spec.get("p_max_elec_w"))
+    if power <= 0 or _num(spec.get("prop_d_in")) <= 0:
+        return None
+    torque = _torque(spec)
     for cls in MOTOR_CLASSES:
-        if cls["p_max_w"] >= POWER_HEADROOM * power                 and cls["q_max_nm"] >= TORQUE_HEADROOM * torque:
+        if (cls["p_max_w"] >= POWER_HEADROOM * power
+                and cls["q_max_nm"] >= TORQUE_HEADROOM * torque):
             out = dict(cls)
             out["reason"] = "%.0f W, %.2f N·m на витлото" % (power, torque)
             return out
@@ -81,15 +167,93 @@ def select(res):
     return out
 
 
-def torque_nm(res):
-    """Момент на витлото при пълна мощност: Q = P_вал / ω."""
-    p = (res or {}).get("propulsion") or {}
-    shaft = _num(p.get("p_max_shaft_w"))
-    motors = max(1, int(_num(p.get("motor_count"), 1)))
-    rpm = _num(p.get("rpm_target")) or _num(p.get("rpm_power"))
+def select(res):
+    """
+    Моторът на дизайна: ръчно избраният (inputs.propulsion.motor) или
+    препоръчаният клас (dict като MOTOR_CLASSES + "reason"), или None.
+    """
+    res = res or {}
+    spec = res.get("propulsion") or {}
+    if _num(spec.get("prop_d_in")) <= 0:
+        return None
+    manual = manual_class(((res.get("inputs") or {}).get("propulsion") or {})
+                          .get("motor"))
+    return manual or recommended(spec)
+
+
+def kv_estimate(cls, spec):
+    """
+    Какво става с ръчно зададения kV при същото витло: оборотите растат
+    ∝ kV, мощността на витлото ∝ n³ → P ≈ P_препоръчана · (kV/kV_преп)³.
+    връща {"kv", "kv_rec", "ratio", "p_w", "i_a"} или None.
+    """
+    kv = _num((cls or {}).get("kv"))
+    kv_rec = _num(spec.get("kv"))
+    volts = _num(spec.get("voltage_v"))
+    p_rec = _num(spec.get("p_motor_elec_w") or spec.get("p_max_elec_w"))
+    if kv <= 0 or kv_rec <= 0 or volts <= 0 or p_rec <= 0:
+        return None
+    ratio = kv / kv_rec
+    p_w = p_rec * ratio ** 3
+    return {"kv": kv, "kv_rec": kv_rec, "ratio": ratio, "p_w": p_w,
+            "i_a": p_w / volts}
+
+
+def checks(motor_in, spec):
+    """Проверки за ръчно избрания мотор: [(ниво, заглавие, текст)]."""
+    cls = manual_class(motor_in)
+    if not cls:
+        return []
+    out = []
+    power = _num(spec.get("p_motor_elec_w") or spec.get("p_max_elec_w"))
+    torque = _torque(spec)
+    rec = recommended(spec)
+    rec_txt = (" Препоръчан: %s." % rec["key"]) if rec else ""
+    if power > cls["p_max_w"]:
+        out.append(("error", "Моторът е слаб за нужната мощност",
+                    "Нужни са %.0f W на мотор, а %s носи до %.0f W.%s"
+                    % (power, cls["key"], cls["p_max_w"], rec_txt)))
+    elif POWER_HEADROOM * power > cls["p_max_w"]:
+        out.append(("warn", "Моторът е на границата на мощността",
+                    "%.0f W от %.0f W (без %d %% резерв) — ще грее при пълна "
+                    "газ.%s" % (power, cls["p_max_w"],
+                                round(100 * (POWER_HEADROOM - 1)), rec_txt)))
+    if torque > cls["q_max_nm"]:
+        out.append(("warn", "Моторът е малък за витлото",
+                    "Витлото иска %.2f N·m, а мотор с камбана Ø%.0f×%.0f mm "
+                    "дава около %.2f N·m — по-малко витло или по-голям мотор."
+                    % (torque, cls["can_d"], cls["can_l"], cls["q_max_nm"])))
+    est = kv_estimate(cls, spec)
+    if est:
+        if est["ratio"] > 1.0 + KV_TOLERANCE:
+            level = ("error" if est["p_w"] > cls["p_max_w"] * 1.1 else "warn")
+            out.append((level, "Kv на мотора е висок за витлото",
+                        "Kv %.0f срещу препоръчани %.0f: витлото %g×%g″ ще "
+                        "тегли ~%.0f W (%.0f A). Вземи по-малко витло, по-"
+                        "малко клетки или мотор с по-нисък Kv."
+                        % (est["kv"], est["kv_rec"], spec.get("prop_d_in"),
+                           spec.get("prop_pitch_in"), est["p_w"], est["i_a"])))
+        elif est["ratio"] < 1.0 - KV_TOLERANCE:
+            out.append(("warn", "Kv на мотора е нисък за витлото",
+                        "Kv %.0f срещу препоръчани %.0f: витлото ще дава само "
+                        "~%.0f W от нужните %.0f W (по-малко тяга). Вземи по-"
+                        "голямо витло или мотор с по-висок Kv."
+                        % (est["kv"], est["kv_rec"], est["p_w"], power)))
+    return out
+
+
+def _torque(spec):
+    shaft = _num(spec.get("p_max_shaft_w"))
+    motors = max(1, int(_num(spec.get("motor_count"), 1)))
+    rpm = _num(spec.get("rpm_target")) or _num(spec.get("rpm_power"))
     if shaft <= 0 or rpm <= 0:
         return 0.0
     return shaft / motors / (rpm * 2.0 * math.pi / 60.0)
+
+
+def torque_nm(res):
+    """Момент на витлото при пълна мощност: Q = P_вал / ω."""
+    return _torque((res or {}).get("propulsion") or {})
 
 
 def bay_radius(res):
@@ -234,7 +398,11 @@ def summary(res):
     return {
         "motor": m["key"], "can_d_mm": m["can_d"], "can_l_mm": m["can_l"],
         "shaft_d_mm": m["shaft_d"], "mount_mm": list(m["mount"]),
-        "mass_g": m["mass_g"], "p_max_w": m["p_max_w"], "reason": m["reason"],
+        "mass_g": round(m["mass_g"], 1), "p_max_w": round(m["p_max_w"]),
+        "reason": m["reason"], "manual": bool(m.get("manual")),
+        "kv": m.get("kv"),
+        "recommended": (recommended(res.get("propulsion") or {}) or {}).get("key"),
+        "kv_estimate": kv_estimate(m, res.get("propulsion") or {}),
         "prop": "%g×%g″" % (p["d_in"], p["pitch_in"]),
         "prop_d_mm": round(p["d_mm"], 1),
         "count": len(lay["units"]),

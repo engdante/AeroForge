@@ -15,6 +15,7 @@ from . import cg
 from . import fuselage
 from . import layout
 from . import materials
+from . import motor as motor_mod
 from . import presets
 from . import printcost
 from . import profiles
@@ -360,7 +361,7 @@ def normalize(inputs):
     _tail_gap = (_legacy_gap if _legacy_gap is not None
                  else _num(lay.get("tail_root_gap_mm"), 10.0))
 
-    return {
+    out = {
         "name": str(merged.get("name") or base["name"])[:60],
         "mission": mission_key,
         "payload": {
@@ -463,6 +464,11 @@ def normalize(inputs):
             "profile": bomc.get("profile") or None,
         },
     }
+    # ръчно избран мотор — само ако е зададен (иначе авто, без ключ)
+    motor_in = motor_mod.normalize_input(prop.get("motor"))
+    if motor_in:
+        out["propulsion"]["motor"] = motor_in
+    return out
 
 
 def resolve(inp):
@@ -726,8 +732,10 @@ def compute_core(inputs):
             spec["battery"]["capacity_source"] = (
                 "от масата на батерията")
         est = ([] if mode == "simple"
-               else propulsion.estimate_component_masses(spec, mission_key,
-                                                         provided))
+               else propulsion.estimate_component_masses(
+                   spec, mission_key, provided,
+                   motor_mass_g=motor_mod.manual_mass_g(
+                       inp["propulsion"].get("motor"))))
         if mode == "simple":
             # В simple режим батерията е част от зададения товар (42%),
             # затова капацитетът идва от масата, а времето е следствие.
@@ -1083,6 +1091,9 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
     checks = build_checks(cfg, geom, stall, spec, cg_res, st, summary,
                           total_g, airframe_g, payload_g, wing_loading,
                           re_cruise, converged, fus, tail, feasible)
+    for level, title, detail in motor_mod.checks(
+            inp["propulsion"].get("motor"), spec):
+        checks.append(_check(level, title, detail))
 
     if not budget_closed:
         checks.append(_check(

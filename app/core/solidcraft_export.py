@@ -78,12 +78,20 @@ def find_cli():
     """
     Път до `solidcraft-cli` или None.
 
-    Търси в SOLIDCRAFT_CLI, PATH и стандартните места за инсталация.
+    Търси в SOLIDCRAFT_CLI, „Допълнения“ (tools/extras.json, tools/solidcraft),
+    PATH и стандартните места за инсталация.
     """
     for key in ("SOLIDCRAFT_CLI", "SOLIDCRAFT_CLI_PATH"):
         value = os.environ.get(key)
         if value and os.path.isfile(value):
             return value
+    try:   # зададен в „Допълнения“ или изтеглен portable (tools/solidcraft)
+        from . import extras
+        value = extras.configured_cli()
+    except Exception:  # noqa: BLE001 — допълненията не бива да спират търсенето
+        value = None
+    if value:
+        return value
     for name in ("solidcraft-cli", "solidcraft-cli.exe"):
         found = shutil.which(name)
         if found:

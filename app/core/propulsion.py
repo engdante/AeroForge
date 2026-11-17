@@ -332,7 +332,8 @@ def servo_plan(mission_key):
     return count, mass
 
 
-def estimate_component_masses(spec, mission_key, provided_categories):
+def estimate_component_masses(spec, mission_key, provided_categories,
+                              motor_mass_g=None):
     """
     Оценява масите на компонентите, които потребителят не е задал.
 
@@ -362,9 +363,14 @@ def estimate_component_masses(spec, mission_key, provided_categories):
     motor_g = max(MOTOR_MIN_G, p_motor / MOTOR_W_PER_G)
     esc_g = max(ESC_MIN_G, p_motor / ESC_W_PER_G)
     suffix = " ×%d" % motors if motors > 1 else ""
-    add("motor_est", "Мотор (оценка по мощност)" + suffix, "motor", motor_g,
-        "%d W входна мощност на мотор, мин. %.0f g"
-        % (round(p_motor), MOTOR_MIN_G), motors)
+    if motor_mass_g:
+        # ръчно избран мотор (таб „Мотор“) — неговата маса
+        add("motor_est", "Мотор (избран)" + suffix, "motor", motor_mass_g,
+            "маса на избрания мотор", motors)
+    else:
+        add("motor_est", "Мотор (оценка по мощност)" + suffix, "motor",
+            motor_g, "%d W входна мощност на мотор, мин. %.0f g"
+            % (round(p_motor), MOTOR_MIN_G), motors)
     add("esc_est", "ESC (оценка)" + suffix, "esc", esc_g,
         "%d A на мотор, мин. %.0f g" % (spec["esc_a"], ESC_MIN_G), motors)
     add("prop_est", "Витло %d×%d" % (spec["prop_d_in"], spec["prop_pitch_in"]),

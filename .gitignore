@@ -36,3 +36,6 @@ tmp/
 /_test_*.py
 /_run_output.txt
 /_stale/
+
+# ---- Допълнения (изтеглен SolidCraft portable, пътища) ----
+tools/

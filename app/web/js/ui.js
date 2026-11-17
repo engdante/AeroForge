@@ -24,7 +24,7 @@ const CHECK_TABS = [
   ["wing", /профил|reflex/i],
   ["fuselage", /фюзелаж|носа|къс нос|тялото/i],
   ["payload", /товар|масов|батерия в списъка|баланс|разместване/i],
-  ["power", /тяга|тягата|мощност|батерия|време на полет|по-малко време|витл|esc/i],
+  ["power", /мотор|kv|тяга|тягата|мощност|батерия|време на полет|по-малко време|витл|esc/i],
   ["tail", /опашк|V_h|V_v|статичен запас|център на тежестта|ЦТ/i],
   ["print", /печат|конструкция|infill/i],
   ["wing", /крило|рейнолдс|загуба|хвърляне|профил|reflex/i],
@@ -77,6 +77,22 @@ const UI = {
       opt.title = f.notes;
       filament.appendChild(opt);
     });
+
+    const motorSel = this.$("motorSize");
+    if (motorSel) {
+      motorSel.innerHTML = '<option value="">авто (препоръка)</option>';
+      (p.motor_classes || []).forEach((m) => {
+        const opt = this.el("option", null,
+          `${m.key} — Ø${m.can_d}×${m.can_l} mm, ~${m.mass_g} g, до ${m.p_max_w} W`);
+        opt.value = m.key;
+        motorSel.appendChild(opt);
+      });
+      const custom = this.el("option", null, "свой (въвеждам размерите)");
+      custom.value = "custom";
+      motorSel.appendChild(custom);
+      motorSel.addEventListener("change", () => this.syncMotorFields());
+      this.syncMotorFields();
+    }
 
     const prop = this.$("propSize");
     prop.innerHTML = '<option value="">авто</option>';
@@ -383,6 +399,7 @@ const UI = {
         thrust_to_weight: this._num("tw"),
         power_to_weight: this._num("pw"),
         prop_d_in: this._num("propSize"),
+        motor: this.readMotor(),
       },
       print: {
         filament: this.$("filamentSelect").value,
@@ -502,6 +519,17 @@ const UI = {
     set("tw", power.thrust_to_weight);
     set("pw", power.power_to_weight);
     set("propSize", power.prop_d_in ? String(power.prop_d_in) : "");
+    const motorIn = power.motor || {};
+    set("motorSize", motorIn.size || "");
+    set("motorKv", motorIn.kv);
+    set("motorMass", motorIn.mass_g);
+    set("motorPmax", motorIn.p_max_w);
+    set("motorCanD", motorIn.can_d_mm);
+    set("motorCanL", motorIn.can_l_mm);
+    set("motorShaft", motorIn.shaft_d_mm);
+    set("motorMountA", (motorIn.mount_mm || [])[0]);
+    set("motorMountB", (motorIn.mount_mm || [])[1]);
+    this.syncMotorFields();
 
     const print = inp.print || {};
     if (print.filament) this.$("filamentSelect").value = print.filament;
@@ -559,8 +587,79 @@ const UI = {
     this.$("componentsBox").classList.toggle("hidden", mode !== "components");
   },
 
+  /** Ръчно избран мотор (или null = авто). */
+  readMotor() {
+    const sel = this.$("motorSize");
+    const size = sel ? sel.value : "";
+    if (!size) return null;
+    const out = {
+      size,
+      kv: this._num("motorKv"),
+      mass_g: this._num("motorMass"),
+      p_max_w: this._num("motorPmax"),
+    };
+    if (size === "custom") {
+      out.can_d_mm = this._num("motorCanD");
+      out.can_l_mm = this._num("motorCanL");
+      out.shaft_d_mm = this._num("motorShaft");
+      const mount = [this._num("motorMountA"), this._num("motorMountB")]
+        .filter((v) => v !== null);
+      if (mount.length) out.mount_mm = mount;
+    }
+    return out;
+  },
+
+  /** Полетата на мотора: видими при ръчен избор, размерите — при „свой“. */
+  syncMotorFields() {
+    const sel = this.$("motorSize");
+    if (!sel) return;
+    const manual = sel.value !== "";
+    this.$("motorManualFields").style.display = manual ? "" : "none";
+    this.$("motorCustomFields").style.display = sel.value === "custom" ? "" : "none";
+    const cls = ((this.presets || {}).motor_classes || [])
+      .find((m) => m.key === sel.value);
+    if (cls) {
+      this.$("motorMass").placeholder = `${cls.mass_g}`;
+      this.$("motorPmax").placeholder = `${cls.p_max_w}`;
+    } else {
+      this.$("motorMass").placeholder = "по размера";
+      this.$("motorPmax").placeholder = "по размера";
+    }
+  },
+
+  /** Подсказката под мотора: препоръка, избран, оценка за Kv. */
+  renderMotorHint(res) {
+    const hint = this.$("motorHint");
+    if (!hint) return;
+    const mv = res && res.motor_view;
+    const p = (res && res.propulsion) || {};
+    if (!mv) { hint.textContent = ""; return; }
+    const kvInput = this.$("motorKv");
+    if (kvInput) kvInput.placeholder = `препоръка ${fmt0(p.kv)}`;
+    const parts = [];
+    if (mv.manual) {
+      parts.push(`Избран: ${mv.motor} (Ø${fmt(mv.can_d_mm, 1)}×${fmt0(mv.can_l_mm)}` +
+        ` mm, ~${fmt0(mv.mass_g)} g, до ${fmt0(mv.p_max_w)} W).`);
+      parts.push(`Препоръка: ${mv.recommended || "—"}, Kv ≈ ${fmt0(p.kv)}.`);
+      const est = mv.kv_estimate;
+      if (est) {
+        parts.push(`С Kv ${fmt0(est.kv)} витлото ${mv.prop} ще тегли ~` +
+          `${fmt0(est.p_w)} W (${fmt(est.i_a, 1)} A).`);
+      } else {
+        parts.push("Въведи Kv, за да проверя дали пасва на витлото.");
+      }
+    } else {
+      parts.push(`Препоръка: ${mv.motor}, Kv ≈ ${fmt0(p.kv)} при ` +
+        `${p.cells}S и витло ${mv.prop} (${mv.reason}).`);
+    }
+    parts.push("Масата влиза в изчислението само в режим „Списък компоненти“ " +
+      "(в „Само общо тегло“ моторът е част от товара).");
+    hint.textContent = parts.join(" ");
+  },
+
   /** Показва „авто“ стойностите като placeholder. */
   syncAutoHints(res) {
+    this.renderMotorHint(res);
     if (!res || !res.resolved) return;
     const r = res.resolved;
     const setPh = (id, value) => {

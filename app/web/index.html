@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AeroForge — калкулатор и генератор на RC самолет</title>
-<link rel="stylesheet" href="style.css?v=083">
+<link rel="stylesheet" href="style.css?v=086">
 </head>
 <body>
 <div class="app">
@@ -16,6 +16,8 @@
     <input id="designName" class="name-input" value="Нов дизайн"
            title="Име на дизайна" maxlength="50">
     <button class="btn" id="btnExample" title="Зареди примерен дизайн">✨ Пример</button>
+    <button class="btn" id="btnExtras"
+            title="Допълнения: APC витла и SolidCraft — изтегляне и настройка">🧩 Допълнения<span class="badge-dot hidden" id="extrasDot"></span></button>
     <button class="btn" id="btnSettings"
             title="Настройки: изглед, филаменти, материали, базови стойности">⚙ Настройки</button>
     <button class="btn" id="btnLoad" title="Заредени дизайни">📂 Дизайни</button>
@@ -441,6 +443,62 @@
             </div>
           </div>
           <div class="group">
+            <div class="group-title">Мотор</div>
+            <div class="field">
+              <label for="motorSize">Размер на мотора</label>
+              <select id="motorSize"></select>
+              <p class="hint">„Авто“ — програмата избира по мощност и въртящ
+                момент. Избери размер (или „свой“), за да моделираш мотора,
+                който имаш или ще купиш.</p>
+            </div>
+            <div class="grid-3" id="motorManualFields">
+              <div class="field">
+                <label for="motorKv">Kv (об/мин/V)</label>
+                <input type="number" id="motorKv" step="10" min="50" max="5000"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="motorMass">Маса (g)</label>
+                <input type="number" id="motorMass" step="1" min="5" max="2000"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="motorPmax">Макс. мощност (W)</label>
+                <input type="number" id="motorPmax" step="10" min="20" max="5000"
+                       placeholder="авто">
+              </div>
+            </div>
+            <div id="motorCustomFields">
+              <div class="grid-3">
+                <div class="field">
+                  <label for="motorCanD">Камбана Ø (mm)</label>
+                  <input type="number" id="motorCanD" step="0.5" min="10" max="80"
+                         placeholder="27.5">
+                </div>
+                <div class="field">
+                  <label for="motorCanL">Дължина (mm)</label>
+                  <input type="number" id="motorCanL" step="0.5" min="5" max="100"
+                         placeholder="26">
+                </div>
+                <div class="field">
+                  <label for="motorShaft">Вал Ø (mm)</label>
+                  <input type="number" id="motorShaft" step="0.01" min="1.5" max="12"
+                         placeholder="3.17">
+                </div>
+              </div>
+              <div class="field">
+                <label>Монтажни отвори — кръст (mm)</label>
+                <div class="grid-2">
+                  <input type="number" id="motorMountA" step="0.5" min="8" max="60"
+                         placeholder="16" title="по-малкият кръг">
+                  <input type="number" id="motorMountB" step="0.5" min="8" max="60"
+                         placeholder="19" title="по-големият кръг">
+                </div>
+              </div>
+            </div>
+            <p class="hint" id="motorHint"></p>
+          </div>
+          <div class="group">
             <div class="group-title">Тяга и витло</div>
             <div class="grid-2">
               <div class="field">
@@ -776,6 +834,74 @@
   </div>
 </div>
 
+<div class="modal hidden" id="extrasModal">
+  <div class="modal-box extras-box">
+    <div class="modal-head">
+      <h3>🧩 Допълнения</h3>
+      <button class="btn btn-sm" id="btnCloseExtras">✕</button>
+    </div>
+    <div class="settings-body">
+      <p class="hint">Външни данни и програми, които AeroForge ползва. Всичко се
+        записва до приложението; нищо не се инсталира в системата.</p>
+
+      <section class="settings-section extra-card">
+        <h4><span class="extra-state" id="apcState">…</span> APC витла (геометрия)</h4>
+        <p class="hint">Геометрията на ~450 витла от apcprop.com — за панела
+          „Витло“ (витло за 3D печат). Архивът се взима от страницата за
+          изтегляния на APC и се разархивира в папка PE0-FILES_WEB.</p>
+        <p class="hint" id="apcInfo"></p>
+        <div class="row-actions">
+          <button class="btn btn-accent btn-sm" id="btnApcDownload">⬇ Изтегли от apcprop.com</button>
+        </div>
+        <div class="extra-progress hidden" id="apcProgress"><div class="bar"></div></div>
+        <p class="hint" id="apcMsg"></p>
+      </section>
+
+      <section class="settings-section extra-card">
+        <h4><span class="extra-state" id="scState">…</span> SolidCraft (CAD → STEP)</h4>
+        <p class="hint">Без SolidCraft експортът записва само скриптовете и
+          SVG-ите; със SolidCraft се строят гладките STEP и детайлният модел.
+          Изтегля се portable версията от
+          <a href="https://github.com/tangency-labs/solidcraft/releases"
+             target="_blank" rel="noopener">GitHub (tangency-labs/solidcraft)</a>
+          — проверена по SHA-256 и разархивирана в tools/solidcraft.</p>
+        <p class="hint" id="scInfo"></p>
+        <p class="hint" id="scLatest"></p>
+        <div class="row-actions">
+          <button class="btn btn-accent btn-sm" id="btnScLatest">⬇ Изтегли последната версия</button>
+        </div>
+        <div class="extra-progress hidden" id="scProgress"><div class="bar"></div></div>
+        <p class="hint" id="scMsg"></p>
+        <details class="extra-more">
+          <summary>Друго: инсталиран SolidCraft или друг архив</summary>
+        <div class="field">
+          <label for="scCliPath">Път до solidcraft-cli (инсталиран)</label>
+          <div class="inline-field">
+            <input type="text" id="scCliPath"
+                   placeholder="C:\Program Files\SolidCraft\solidcraft-cli.exe">
+            <button class="btn btn-sm" id="btnScSetPath">Запази пътя</button>
+          </div>
+        </div>
+        <div class="field">
+          <label for="scUrl">…или адрес на друг архив (.zip / .tar.gz)</label>
+          <div class="inline-field">
+            <input type="text" id="scUrl"
+                   placeholder="https://github.com/tangency-labs/solidcraft/releases/download/…">
+            <button class="btn btn-sm" id="btnScDownload">⬇ Изтегли</button>
+          </div>
+          <p class="hint">Напр. nightly версия. Архивът се разархивира в
+            tools/solidcraft и AeroForge сам намира solidcraft-cli в него.</p>
+        </div>
+        </details>
+      </section>
+    </div>
+    <div class="modal-foot">
+      <span class="spacer"></span>
+      <button class="btn" id="btnExtrasDone">Готово</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal hidden" id="settingsModal">
   <div class="modal-box settings-box">
     <div class="modal-head">
@@ -902,12 +1028,13 @@
 </div>
 
 <script type="text/javascript" src="/eel.js"></script>
-<script src="js/api.js?v=072"></script>
+<script src="js/api.js?v=074"></script>
 <script src="js/charts.js?v=083"></script>
 <script src="js/viewer3d.js?v=084"></script>
-<script src="js/ui.js?v=086"></script>
+<script src="js/ui.js?v=087"></script>
 <script src="js/settings.js?v=081"></script>
-<script src="js/app.js?v=083"></script>
+<script src="js/extras.js?v=002"></script>
+<script src="js/app.js?v=084"></script>
 </body>
 </html>
 
