@@ -21,6 +21,7 @@ a = Analysis(
         'core.printgeom', 'core.stl', 'core.assembly', 'core.meshcheck',
         'core.export_3mf', 'core.export_step', 'core.export_dxf',
         'core.model_export', 'core.solidcraft_export', 'core.export_job',
+        'core.controls', 'core.detailed_model', 'core.motor',
     ],
     hookspath=[],
     hooksconfig={},

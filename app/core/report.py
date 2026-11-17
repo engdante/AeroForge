@@ -1,4 +1,4 @@
-"""
+﻿"""
 report.py — отчети: Markdown, HTML и BOM (CSV).
 
 Отчетът е самостоятелен (inline CSS, без външни ресурси) и се записва в
@@ -14,6 +14,7 @@ import os
 import re
 
 from . import aero
+from . import printgeom
 
 DISCLAIMER = (
     "Този отчет е изчислен с емпирични модели за RC моделизъм и НЕ е "
@@ -68,12 +69,12 @@ def build_bom_csv(res):
                      _f(res["weights"]["total_g"], 1), "", "", ""])
     writer.writerow([])
     writer.writerow(["#", "Печатана част", "Брой", "Обем (cm³)",
-                     "Маса (g)", "Филамент (m)", "Време (h)", "Цена (€)"])
+                     "Маса (g)", "Филамент (m)", "Време (h)"])
     for i, p in enumerate(res["print"]["parts"], 1):
         writer.writerow([
             i, p["name"], p["pieces"], _f(p["volume_cm3"], 1),
             _f(p["mass_g"], 1), _f(p["filament_m"], 1),
-            _f(p["time_h"], 1), _f(p["cost"], 2),
+            _f(p["time_h"], 1),
         ])
     return buf.getvalue()
 
@@ -118,13 +119,12 @@ def build_report_markdown(res):
         % _f(bat["endurance_min"], 0))
     add("| ЦТ | %s %% MAC |" % _f(s["cg_pct_mac"], 1))
     add("| Статичен запас | %s %% MAC |" % _f(s["static_margin_pct"], 1))
-    add("| Готов за полет | **%s** |"
+    add("| Минава проверките | **%s** |"
         % ("да" if s.get("ready_to_fly") else "не"))
     add("| Маса на печата | %s g (%s %%) |"
         % (_f(w["airframe_g"], 0), _f(w["airframe_pct"], 0)))
-    add("| Печат: време / филамент / цена | %s h / %s g / %s € |"
-        % (_f(pr["time_h"], 1), _f(pr["total_mass_g"], 0),
-           _f(pr["cost"], 0)))
+    add("| Печат: време / филамент | %s h / %s g |"
+        % (_f(pr["time_h"], 1), _f(pr["total_mass_g"], 0)))
     add("")
 
     lay = res.get("layout") or {}
@@ -308,6 +308,13 @@ def build_report_markdown(res):
            _f(st["joiner_tube"]["id_mm"], 1),
            _f(st["joiner_tube"]["length_mm"], 0),
            st["joiner_tube"]["count"]))
+    ch = printgeom.joiner_channel(res)
+    if ch:
+        add("- Канал за джойнера (на половина): ⌀%s mm, дълбочина %s mm, "
+            "на %s mm от водещия ръб, стена %s mm%s"
+            % (_f(ch["bore_mm"], 2), _f(ch["depth_mm"], 0),
+               _f(ch["x_mm"], 0), _f(ch["wall_margin_mm"], 2),
+               "" if ch["ok"] else " — ПОД ЛИМИТА, виж проверките"))
     add("- Деформация на върха: %s mm (лимит %s mm)"
         % (_f(st["deflection_carbon_mm"] if st["carbon_required"]
               else st["deflection_print_mm"], 1),
@@ -316,10 +323,9 @@ def build_report_markdown(res):
 
     add("## 7. Печат")
     add("")
-    add("- Филамент: **%s** (%s g/cm³, %s €/kg)"
+    add("- Филамент: **%s** (%s g/cm³)"
         % (res["filament"]["name"],
-           _f(res["filament"]["printed_density"], 2),
-           _f(res["filament"]["price_per_kg"], 0)))
+           _f(res["filament"]["printed_density"], 2)))
     add("- Дюза %s mm, %s периметъра, %s %% infill, слоеве %s mm"
         % (_f(res["resolved"]["nozzle"], 2),
            res["resolved"]["perimeters"], _f(res["resolved"]["infill"], 0),
@@ -338,11 +344,10 @@ def build_report_markdown(res):
     add("")
     add("Сравнение на филаментите при същия обем:")
     add("")
-    add("| Филамент | Маса (g) | Цена (€) |")
-    add("|---|---|---|")
+    add("| Филамент | Маса (g) |")
+    add("|---|---|")
     for fc in w["filament_comparison"]:
-        add("| %s | %s | %s |" % (fc["name"], _f(fc["mass_g"], 0),
-                                  _f(fc["cost"], 0)))
+        add("| %s | %s |" % (fc["name"], _f(fc["mass_g"], 0)))
     add("")
 
     add("## 8. Проверки")
@@ -422,7 +427,7 @@ def build_report_html(res):
         ("Тяга : тегло", "%s : 1" % _f(p["thrust_to_weight_actual"], 2)),
         ("Време на полет", "~%s мин" % _f(bat["endurance_min"], 0)),
         ("ЦТ", "%s %% MAC" % _f(s["cg_pct_mac"], 1)),
-        ("Готов за полет", "да" if s.get("ready_to_fly") else "не"),
+        ("Минава проверките", "да" if s.get("ready_to_fly") else "не"),
         ("Печат", "%s g / %s h" % (_f(w["airframe_g"], 0),
                                    _f(pr["time_h"], 1))),
     ]
@@ -567,13 +572,11 @@ def build_report_html(res):
     for part in pr["parts"]:
         rows.append([part["name"], part["pieces"],
                      _f(part["volume_cm3"], 1), _f(part["mass_g"], 0),
-                     _f(part["filament_m"], 1), _f(part["time_h"], 1),
-                     _f(part["cost"], 2)])
+                     _f(part["filament_m"], 1), _f(part["time_h"], 1)])
     rows.append(["ОБЩО", pr["pieces"], "", _f(pr["total_mass_g"], 0),
-                 _f(pr["filament_m"], 1), _f(pr["time_h"], 1),
-                 _f(pr["cost"], 2)])
+                 _f(pr["filament_m"], 1), _f(pr["time_h"], 1)])
     parts.append(_table(["Част", "Бр.", "Обем (cm³)", "Маса (g)",
-                         "Филамент (m)", "Време (h)", "Цена (€)"], rows))
+                         "Филамент (m)", "Време (h)"], rows))
 
     parts.append("<h2>Проверки</h2><ul>")
     for c in res["checks"]:

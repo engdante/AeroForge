@@ -7,9 +7,14 @@ AeroForge не строи NURBS сам: геометрията се дава к�
 
     sections/<тяло>/<секция>.svg   затворени профили (за ръчен loft/друг CAD)
     sections/manifest.csv          равнината на всяка секция
-    solidcraft_model.json          команден скрипт за SolidCraft
+    solidcraft_model.json          команден скрипт за SolidCraft (loft + join)
+    steps/profiles.json            същите профили без loft (за aircraft.sc)
     aircraft.step                  гладкият solid (ако solidcraft-cli работи)
-    aircraft.sc                    дизайнът с история (скици + loft)
+    aircraft.sc                    дизайнът: само профилите, без loft
+
+`aircraft.sc` завършва с профилите на тялото, крилата и опашката — Loft и
+Join в него няма, свързването го прави потребителят. Гладкият solid за
+STEP се строи в работния дизайн на стъпките (`steps/loft.sc`).
 
 Скриптът може да се пусне и на ръка:
 
@@ -46,6 +51,11 @@ DEFAULT_DETAIL = {
     "fuselage_stations": 5,   # сечения по дължината
     "tail_stations": 5,
 }
+
+# Maximum geometric error when reducing each airfoil surface's fit points for
+# SolidCraft sketches. This is only for the editable CAD loft; printed meshes
+# and exported SVG control profiles retain their full-resolution geometry.
+CAD_SPLINE_TOLERANCE_MM = 0.5
 
 MANIFEST_HEADER = [
     "body", "section", "kind", "svg",
@@ -128,6 +138,105 @@ def airfoil_curves(section):
     return upper, lower
 
 
+def _point_segment_distance(point, start, end):
+    """Minimum 2D distance from a point to a finite line segment."""
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    length2 = dx * dx + dy * dy
+    if length2 <= 1e-18:
+        return math.hypot(point[0] - start[0], point[1] - start[1])
+    t = max(0.0, min(1.0, (
+        (point[0] - start[0]) * dx + (point[1] - start[1]) * dy
+    ) / length2))
+    return math.hypot(point[0] - start[0] - t * dx,
+                      point[1] - start[1] - t * dy)
+
+
+def _simplified_curve_indices(curves, tolerance_mm):
+    """Shared Douglas–Peucker indices for loft-compatible section curves."""
+    if not curves or len(curves[0]) < 3:
+        return list(range(len(curves[0]))) if curves else []
+    count = len(curves[0])
+    if any(len(curve) != count for curve in curves):
+        return list(range(count))
+
+    keep = {0, count - 1}
+
+    def visit(curve, first, last, tolerance):
+        start, end = curve[first], curve[last]
+        index = None
+        distance = tolerance
+        for i in range(first + 1, last):
+            current = _point_segment_distance(curve[i], start, end)
+            if current > distance:
+                index, distance = i, current
+        if index is not None:
+            keep.add(index)
+            visit(curve, first, index, tolerance)
+            visit(curve, index, last, tolerance)
+
+    for curve in curves:
+        chord = max(p[0] for p in curve) - min(p[0] for p in curve)
+        if chord <= 1e-9:
+            return list(range(count))
+        normalized = [(p[0] / chord, p[1] / chord) for p in curve]
+        visit(normalized, 0, count - 1, max(0.0, tolerance_mm) / chord)
+    return sorted(keep)
+
+
+def airfoil_spline(section):
+    """
+    Контурът на профила като ЕДИН отворен сплайн: заден ръб → едната
+    повърхност → нос → другата повърхност → заден ръб; затваря се с правата
+    стена на задния ръб. Носът е вътре в сплайна (гладък), а не шев между
+    две криви. Връща (точки, индекс на носа) или ([], None) без стена.
+    """
+    upper, lower = airfoil_curves(section)
+    if not lower:
+        return [], None
+    spline = list(lower) + list(upper[1:])     # TE₂ → … → нос → … → TE₁
+    le = min(range(len(spline)), key=lambda i: (spline[i][0], abs(spline[i][1])))
+    return spline, le
+
+
+def simplified_airfoil_splines(sections, tolerance_mm=CAD_SPLINE_TOLERANCE_MM):
+    """
+    Опростените сплайни на сеченията с ОГЛЕДАЛНО избрани точки.
+
+    Двете половини (от носа към всеки заден ръб) се опростяват поотделно, а
+    после всяка запазва обединението на избраните индекси (мерени от носа).
+    Профилите са с еднакви x горе и долу, затова при симетричен профил
+    (кил, стабилизатор) двете страни на сплайна получават едни и същи
+    станции — сплайнът е симетричен. Индексите са общи за всички сечения
+    (loft-ът иска еднаква топология).
+    """
+    data = [airfoil_spline(section) for section in sections]
+    if not data or any(le is None for _s, le in data):
+        return [spline for spline, _le in data]
+    les = {le for _s, le in data}
+    lengths = {len(s) for s, _le in data}
+    if len(les) != 1 or len(lengths) != 1:
+        return [spline for spline, _le in data]
+    le = les.pop()
+    count = lengths.pop()
+    side_a = [list(reversed(s[:le + 1])) for s, _le in data]    # нос → TE₂
+    side_b = [list(s[le:]) for s, _le in data]                   # нос → TE₁
+    if len(side_a[0]) == len(side_b[0]):
+        keep = (set(_simplified_curve_indices(side_a, tolerance_mm))
+                | set(_simplified_curve_indices(side_b, tolerance_mm)))
+        keep = sorted(keep)
+        out = []
+        for a, b in zip(side_a, side_b):
+            half_a = [a[i] for i in keep]
+            half_b = [b[i] for i in keep]
+            out.append(list(reversed(half_a)) + half_b[1:])
+        return out
+    keep = _simplified_curve_indices([s for s, _le in data], tolerance_mm)
+    if count - 1 not in keep:
+        keep.append(count - 1)
+    return [[s[i] for i in sorted(set(keep) | {le})] for s, _le in data]
+
+
 def _fmt(value):
     return ("%.4f" % _r(value)).rstrip("0").rstrip(".") or "0"
 
@@ -170,8 +279,20 @@ def _closed_path(points):
     return " ".join([head] + _cubic_segments(pts, closed=True) + ["Z"])
 
 
+def _polygon_path(points):
+    """Затворен път от прави отсечки (резачите на елероните)."""
+    pts = list(points)
+    if len(pts) < 3:
+        return ""
+    return " ".join(["M %s %s" % (_fmt(pts[0][0]), _fmt(pts[0][1]))]
+                    + ["L %s %s" % (_fmt(p[0]), _fmt(p[1])) for p in pts[1:]]
+                    + ["Z"])
+
+
 def _profile_path(section):
     """Път на профил: LE → горна → TE_top → TE_bot → долна → LE."""
+    if (section.get("primitive") or {}).get("type") == "polygon":
+        return _polygon_path(section["points2d"])
     upper, lower = airfoil_curves(section)
     if not upper:
         return _closed_path(section["points2d"])
@@ -183,7 +304,7 @@ def _profile_path(section):
     return " ".join(parts + ["Z"])
 
 
-def svg_text(points, path_d):
+def svg_text(points, path_d, primitive=None):
     """Самостоятелен SVG с един затворен профил (в mm, реални координати)."""
     xs = [p[0] for p in points]
     ys = [p[1] for p in points]
@@ -192,15 +313,31 @@ def svg_text(points, path_d):
     pad = max(1.0, 0.04 * max(x1 - x0, y1 - y0))
     width = max(0.01, (x1 - x0) + 2 * pad)
     height = max(0.01, (y1 - y0) + 2 * pad)
+    if primitive and primitive.get("type") == "ellipse":
+        center = primitive["center"]
+        major = primitive["major"]
+        major_len = math.hypot(float(major[0]), float(major[1]))
+        minor_len = float(primitive["minor_radius"])
+        # `major` е краят на голямата ос: ако е по Y, осите се разменят.
+        if abs(float(major[1])) > abs(float(major[0])):
+            rx, ry = minor_len, major_len
+        else:
+            rx, ry = major_len, minor_len
+        shape = ('<ellipse cx="%s" cy="%s" rx="%s" ry="%s" '
+                 'fill="none" stroke="#000000" stroke-width="0.2"/>\n' % (
+                     _fmt(center[0]), _fmt(center[1]), _fmt(rx), _fmt(ry)))
+    else:
+        shape = ('<path d="%s" fill="none" stroke="#000000" '
+                 'stroke-width="0.2"/>\n' % path_d)
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<svg xmlns="http://www.w3.org/2000/svg" '
         'width="%.3fmm" height="%.3fmm" '
         'viewBox="%.4f %.4f %.4f %.4f">\n'
         '<g transform="scale(1,-1)">\n'
-        '<path d="%s" fill="none" stroke="#000000" stroke-width="0.2"/>\n'
+        '%s'
         '</g>\n</svg>\n'
-        % (width, height, x0 - pad, -(y1 + pad), width, height, path_d))
+        % (width, height, x0 - pad, -(y1 + pad), width, height, shape))
 
 
 def write_sections(folder, bodies):
@@ -233,7 +370,8 @@ def write_sections(folder, bodies):
             with open(os.path.join(body_dir, "%s.svg" % label), "w",
                       encoding="utf-8") as f:
                 f.write(svg_text(section["points2d"],
-                                 _profile_path(section)))
+                                 _profile_path(section),
+                                 section.get("primitive")))
             rows.append([name, label, "loft",
                          "sections/%s/%s.svg" % (name, label)]
                         + _vector(section["origin"])
@@ -273,7 +411,7 @@ def body_order(bodies):
     return out
 
 
-def build_commands(bodies, out_step=None, combine=True):
+def build_commands(bodies, out_step=None, combine=True, loft=True):
     """
     Командите за SolidCraft: скица на всяка секция → loft/revolve → combine.
 
@@ -283,11 +421,19 @@ def build_commands(bodies, out_step=None, combine=True):
     — „<тяло> loft“, за да се четат в дървото на дизайна.
 
     `combine=False` оставя телата отделни (за 3MF/STEP без boolean).
+
+    `loft=False` спира след скиците: скриптът дава само **профилите** на
+    тялото, крилата и опашката (виж `profile_bodies`), без loft, revolve и
+    combine — свързването остава за потребителя.
     """
+    if not loft:
+        bodies = profile_bodies(bodies)
     commands = []
     for body in body_order(bodies):
         name = body["name"]
         if body["kind"] == "revolve":
+            if not loft:
+                continue
             profile = body["profile"]
             commands.append({"command": "sketch.create", "params": {
                 "plane": {key: _vector(value)
@@ -302,31 +448,49 @@ def build_commands(bodies, out_step=None, combine=True):
             continue
 
         labels = []
-        for section in body["sections"]:
+        sections = body["sections"]
+        splines = simplified_airfoil_splines(sections)
+        for section, spline in zip(sections, splines):
             sketch = "%s %s" % (name, section["name"])
             labels.append(sketch)
             commands.append({"command": "sketch.create", "params": {
                 "plane": _plane(section), "frame": "world", "name": sketch}})
-            upper, lower = airfoil_curves(section)
-            if not lower:
+            primitive = section.get("primitive")
+            if primitive and primitive.get("type") == "polygon":
+                # резач (призма на елерона): затворен многоъгълник
+                commands.append({"command": "sketch.line", "params": {
+                    "points": _points2d(section["points2d"]),
+                    "closed": True}})
+            elif primitive and primitive.get("type") == "ellipse":
+                commands.append({"command": "sketch.ellipse", "params": {
+                    "center": _points2d([primitive["center"]])[0],
+                    "major": _points2d([primitive["major"]])[0],
+                    "minor_radius": _r(primitive["minor_radius"])}})
+            elif not spline:
                 commands.append({
                     "command": "sketch.spline.fit_point",
                     "params": {"points": _points2d(section["points2d"]),
                                "periodic": True}})
             else:
+                # един сплайн през носа (гладък и симетричен) + стената на
+                # задния ръб (виж simplified_airfoil_splines)
                 commands.append({
                     "command": "sketch.spline.fit_point",
-                    "params": {"points": _points2d(upper)}})
-                commands.append({
-                    "command": "sketch.spline.fit_point",
-                    "params": {"points": _points2d(lower)}})
+                    "params": {"points": _points2d(spline)}})
                 commands.append({
                     "command": "sketch.line",
-                    "params": {"points": _points2d([upper[-1], lower[0]])}})
+                    "params": {"points": _points2d([spline[-1], spline[0]])}})
             commands.append({"command": "sketch.finish", "params": {}})
+        if not loft:
+            # само профилите: свързването (loft-овете) е за потребителя
+            continue
         params = {"sections": [{"sketch": label} for label in labels],
                   "body_name": name, "name": "%s loft" % name}
         commands.append({"command": "solid.loft", "params": params})
+        commands.extend(_cutter_commands(body))
+
+    if not loft:
+        return commands
 
     # Всички тела се създават отделно, а обединяването е **една** операция
     # на тяло: `solid.combine` с всички инструменти наведнъж. Последователните
@@ -350,9 +514,45 @@ def build_commands(bodies, out_step=None, combine=True):
     return commands
 
 
-def build_script(bodies, out_step=None, combine=True):
+def _cutter_commands(body):
+    """
+    Boolean-ите на резачите (елерони), веднага след loft-а им.
+
+    `op: intersect` — тялото-резач става сечението си с `with` (крилото
+    остава: `keep_tools`), т.е. от призмата остава самият елерон.
+    `op: cut` — резачът се изважда от `from` (крилото) и оставя процепа.
+    """
+    op = body.get("op")
+    name = body["name"]
+    if op == "intersect" and body.get("with"):
+        return [{"command": "solid.combine", "params": {
+            "target": name, "tools": [body["with"]],
+            "operation": "intersect", "keep_tools": True,
+            "name": "%s intersect" % name}}]
+    if op == "cut" and body.get("from"):
+        return [{"command": "solid.combine", "params": {
+            "target": body["from"], "tools": [name], "operation": "cut",
+            "name": "%s cut" % name}}]
+    return []
+
+
+def profile_bodies(bodies):
+    """
+    Телата, чийто профил има смисъл да се свързва на ръка: тяло, криле, опашка.
+
+    Каулингът и спинерът са revolve (не секции за loft), а уинглетите са
+    малки профили в върха — те не влизат в списъка за ръчно свързване.
+    """
+    return [body for body in body_order(bodies)
+            if body["kind"] == "loft"
+            and not body["name"].startswith("Winglet")
+            and not body.get("cutter")]
+
+
+def build_script(bodies, out_step=None, combine=True, loft=True):
     """Целият команден скрипт за SolidCraft."""
-    return {"commands": build_commands(bodies, out_step, combine=combine)}
+    return {"commands": build_commands(bodies, out_step, combine=combine,
+                                       loft=loft)}
 
 
 def step_errors(text):
@@ -448,10 +648,15 @@ def readme_text(name, bodies, joins=None, sink_mm=0.0, split=None,
         "Какво има тук:",
         "  aircraft.step          обединеният solid — за CAD с boolean операции",
         "  aircraft.3mf           същата геометрия като мрежа — за друг CAD/слайсер",
-        "  aircraft.sc            дизайнът на AeroForge (скици + loft + join)",
+        "  aircraft.sc            дизайнът на AeroForge: САМО профилите, без loft",
         "  preview.png            как изглежда моделът (iso изглед)",
         "  reference.step/.3mf    габарити: батерия, мотор, ESC, приемник, серво, ЦГ",
         "  sections/              по един SVG профил на всяка секция + manifest.csv",
+        "  steps/                 командните скриптове + loft.sc (loft-ът и join-овете)",
+        "  aircraft_detailed.sc   ДЕТАЙЛЕН модел: крило и опашка с централен профил,",
+        "                         слети с кухото тяло; капак, серва, елерони с панта,",
+        "                         мотор (стойка, 4×M3) и витло",
+        "  aircraft_detailed.step същият детайлен модел като STEP",
         "",
         "3MF или STEP?",
         "  3MF е МРЕЖА (триъгълници): отваря се навсякъде (Fusion, FreeCAD,",
@@ -466,6 +671,23 @@ def readme_text(name, bodies, joins=None, sink_mm=0.0, split=None,
     elif three_mf.get("source") == "mesh":
         lines.append("  Тук aircraft.3mf е от мрежата на AeroForge (SolidCraft "
                      "не е изпълнен).")
+    if info.get("detailed_notes"):
+        lines += ["", "ДЕТАЙЛЕН МОДЕЛ (aircraft_detailed.sc)%s:"
+                  % ("" if info.get("detailed_built")
+                     else " — само скриптът steps/detailed.json")]
+        lines += ["  " + note for note in info["detailed_notes"]]
+        lines += [
+            "  Тела: Fuselage (тяло + крило + опашка, слети в едно), Hatch",
+            "  (капак), Aileron_R/L, Servo_Cover_R/L, Spar_Tube, Spinner,",
+            "  Elevator_R/L + Rudder (или Ruddervator_R/L при V-опашка),",
+            "  Pushrod_* — тягите; REF_Servo_* — сервата, REF_Motor_* и",
+            "  REF_Prop_* — моторът и витлото (само ориентир, не се печатат).",
+            "  Моторът се завинтва с 4×M3 през стойката и преградата.",
+            "  Вътрешността на тялото е празна — моделирай я сам.",
+            "  Ос на пантата: крило — филамент 1.75 mm, опашка — стоманена",
+            "  тел Ø1 mm; вкарва се от върха (при T-опашка рудерът — отгоре).",
+            "  Тягите на опашката минават през канали Ø3.2 в тялото.",
+        ]
     lines += [
         "",
         "Ред на импорт:",
@@ -474,9 +696,14 @@ def readme_text(name, bodies, joins=None, sink_mm=0.0, split=None,
         "",
         "КАК Е ПОСТРОЕН (както би го направил човек):",
         "  всяка секция е скица на своята равнина, профилът е spline през",
-        "  точките, а телата се създават с Loft → Join в тялото:",
+        "  точките. aircraft.sc спира дотук: в него има само профилите на",
+        "  тялото, крилата и опашката — Linked/Loft и Join ги правиш ти.",
+        "  Гладкият solid (aircraft.step) е построен със същите скици в",
+        "  работния дизайн steps/loft.sc (loft + join), който aircraft.sc не",
+        "  съдържа.",
         "",
     ]
+    lines.append("Свързване (loft + join) — как е сглобен steps/loft.sc:")
     for row in (joins or []):
         lines.append("    %-14s → %-10s застъпване %s mm"
                      % (row.get("body", "?"), row.get("into", "?"),
@@ -486,11 +713,19 @@ def readme_text(name, bodies, joins=None, sink_mm=0.0, split=None,
     if split:
         lines += [
             "",
-            "  Крилото и стабилизаторът са по две половини (разрез в y = 0):",
-            "  коренът на всяка е вътре в тялото и се влива в него с един",
-            "  чист join. Цяла повърхност, която минава през тялото, дава",
-            "  пресечна крива от две дъги и SolidCraft не я смята.",
+            "  Крилото и стабилизаторът са по две половини (разрез в y = 0).",
         ]
+        if joins:
+            lines += [
+                "  Коренът на всяка е вътре в тялото и се влива в него с един",
+                "  чист join. Цяла повърхност, която минава през тялото, дава",
+                "  пресечна крива от две дъги и SolidCraft не я смята.",
+            ]
+        else:
+            lines += [
+                "  Всяка половина е самостоятелно тяло с луфт към тялото —",
+                "  без обединяване.",
+            ]
     if sink_mm:
         lines += [
             "",
@@ -502,26 +737,47 @@ def readme_text(name, bodies, joins=None, sink_mm=0.0, split=None,
     lines += [
         "",
         "РЕДАКЦИЯ НА РЪКА:",
-        "  Отвори aircraft.sc в SolidCraft. В дървото има:",
-        "    <тяло> loft   — loft-ът (2…50 сечения)",
-        "    <тяло> S01…   — скиците, по една на секция",
-        "  Цъкни скица (напр. Wing_R S01), хвани точка от spline-а и я премести:",
-        "  loft-ът и обединеното тяло се преизграждат. Нови сечения се добавят",
-        "  с Loft → Sections. sections/manifest.csv дава за всяка скица",
-        "  равнината (origin / x_dir / y_dir) и станцията в mm.",
+        "  Отвори aircraft.sc в SolidCraft. В дървото има само скици:",
+        "    <тяло> S01…   — по една скица на всяка секция (профилите)",
+        "  Свържи ги: избери скиците на едно тяло по ред (S01, S02, …) →",
+        "  Solid ▸ Loft, после Join спрямо тялото. После премести точка от",
+        "  spline-а на някоя скица (напр. Wing_R S01) — твоят loft се преизгражда.",
+        "  Готовият вариант (същите скици + loft + join) е steps/loft.sc.",
+        "  sections/manifest.csv дава за всяка скица равнината (origin / x_dir /",
+        "  y_dir) и станцията в mm — оттам са и скиците в aircraft.sc.",
         "",
-        "Ако aircraft.step липсва, скриптът не е изпълнен. Пусни го с:",
+        "Ако aircraft.step липсва, loft-ът не е изпълнен. Пусни го с:",
         "",
-        "  solidcraft-cli run solidcraft_model.json --out aircraft.step --save aircraft.sc",
+        "  solidcraft-cli run solidcraft_model.json --out aircraft.step --save steps/loft.sc",
         "",
         "Тела в модела:",
     ]
+    cutters = [body for body in bodies if body.get("cutter")]
+    if cutters:
+        lines += [
+            "  Елерони: за всяка половина призма зад линията на пантата.",
+            "    Aileron_R/L       сечение с крилото (intersect) → самият елерон",
+            "    Aileron_Slot_R/L  изрязва се от крилото (cut) → процеп около него",
+            "  Елеронът е отделно тяло; пантата/хорнът се добавят в CAD.",
+            "",
+        ]
+    profiles = {body["name"] for body in profile_bodies(bodies)}
     for body in bodies:
+        if body.get("op") == "cut":
+            lines.append("  %-14s резач → cut от %s" % (body["name"],
+                                                        body.get("from")))
+            continue
+        if body.get("op") == "intersect":
+            lines.append("  %-14s елерон (intersect с %s) · само в steps/loft.sc"
+                         % (body["name"], body.get("with")))
+            continue
+        mark = (" · профилите в aircraft.sc"
+                if body["name"] in profiles else " · само в steps/loft.sc")
         if body["kind"] == "revolve":
-            lines.append("  %-14s revolve → join" % body["name"])
+            lines.append("  %-14s revolve → join%s" % (body["name"], mark))
         else:
-            lines.append("  %-14s loft, %d сечения → join"
-                         % (body["name"], len(body.get("sections") or [])))
+            lines.append("  %-14s %2d сечения → join%s"
+                         % (body["name"], len(body.get("sections") or []), mark))
     lines += [
         "",
         "За ръчен loft в друг CAD:",
@@ -546,6 +802,12 @@ def group_steps(bodies):
     names = [b["name"] for b in bodies]
     steps = [{"id": "prep", "kind": "prep", "label": "Сечения + 3MF (мрежа)",
               "bodies": [], "est_s": 1.5}]
+    # Профилите са отделна стъпка и тя е първата, която пипа дизайна:
+    # `aircraft.sc` завършва с тях (без loft), а loft-ът и join-овете се
+    # пускат в работния дизайн на стъпките за STEP.
+    steps.append({"id": "profiles", "kind": "profiles",
+                  "label": "Профили в aircraft.sc (без loft)",
+                  "bodies": [], "est_s": 6.0})
     base = [n for n in ("Fuselage", "Cowl", "Spinner") if n in names]
     if base:
         steps.append({"id": "body", "kind": "group", "label": "Тяло и нос",
@@ -556,12 +818,17 @@ def group_steps(bodies):
     # крило) — точно пътят, който висеше и надхвърляше таймаута, а при
     # прекъсване моделът оставаше само с едно крило.
     wings = [name for name in ("Wing", "Wing_R", "Wing_L",
-                               "Winglet_R", "Winglet_L")
+                               "Winglet_R", "Winglet_L",
+                               "Aileron_R", "Aileron_Slot_R",
+                               "Aileron_L", "Aileron_Slot_L")
              if name in names]
     if wings:
+        has_ailerons = any(n.startswith("Aileron") for n in wings)
         steps.append({"id": "wing", "kind": "group",
-                      "label": "Крила (ляво + дясно)",
-                      "bodies": wings, "est_s": 70.0})
+                      "label": ("Крила + елерони (ляво + дясно)"
+                                if has_ailerons else "Крила (ляво + дясно)"),
+                      "bodies": wings,
+                      "est_s": 70.0 + (20.0 if has_ailerons else 0.0)})
     fin = [name for name in ("Fin",) if name in names]
     if fin:
         steps.append({"id": "fin", "kind": "group", "label": "Кил",
@@ -581,6 +848,11 @@ def group_steps(bodies):
     steps.append({"id": "finish", "kind": "finish",
                   "label": "STEP + 3MF + превю", "bodies": [], "est_s": 12.0})
     return steps
+
+
+def profiles_script(bodies):
+    """Скрипт само със скиците-профили (тяло, криле, опашка) — за aircraft.sc."""
+    return build_script(profile_bodies(bodies), loft=False)
 
 
 def group_script(bodies, names, out_step=None):

@@ -45,6 +45,15 @@ const API = {
   getSettings() { return this.call("get_settings"); },
   saveSettings(payload) { return this.call("save_settings", payload); },
   resetSettings() { return this.call("reset_settings"); },
+  profileCosts(inputs) { return this.call("profile_costs", inputs); },
+  getCatalog() { return this.call("get_catalog"); },
+  saveCatalog(payload) { return this.call("save_catalog", payload); },
+  resetCatalog() { return this.call("reset_catalog"); },
+  propellerList() { return this.call("list_propellers"); },
+  propellerSummary(name, rpm, material, infill, bed) {
+    return this.call("propeller_summary", name, rpm, material, infill, bed);
+  },
+  propellerStl(name) { return this.call("export_propeller_stl", name); },
 };
 
 /** Форматира число с фиксирани знаци; null/undefined -> „—“ */

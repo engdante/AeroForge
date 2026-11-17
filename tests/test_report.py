@@ -1,4 +1,4 @@
-"""
+﻿"""
 Тестове за отчетите и експорта (Markdown, HTML, BOM, JSON).
 """
 
@@ -79,10 +79,22 @@ class TestReports(unittest.TestCase):
         part_rows = [r for r in rows[cut + 1:] if r and r[0].isdigit()]
         self.assertGreater(len(part_rows), 0)
         for row in part_rows:
-            self.assertEqual(len(row), 8)
+            self.assertEqual(len(row), 7)   # без колона „Цена“
 
         total_line = [r for r in rows[1:cut] if "ОБЩО" in r]
         self.assertEqual(len(total_line), 1)
+
+    def test_reports_have_no_prices(self):
+        """Приложението не показва цени — само грамове/метри филамент."""
+        texts = [report.build_bom_csv(self.res),
+                 report.build_report_markdown(self.res)]
+        html = getattr(report, "build_report_html", None)
+        if html:
+            texts.append(html(self.res))
+        for text in texts:
+            self.assertNotIn("€", text)
+            self.assertNotIn("Цена", text)
+            self.assertNotIn("EUR", text)
 
     def test_slugify(self):
         self.assertEqual(report.slugify("Мой дизайн 1"), "Мой_дизайн_1")

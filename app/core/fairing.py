@@ -1,4 +1,4 @@
-"""
+﻿"""
 fairing.py — нос на модела: параметри на спинер + каулинг.
 
 Модулът НЕ строи мрежи — само дава параметри, за да може geometry3d
@@ -13,6 +13,7 @@ fairing.py — нос на модела: параметри на спинер + 
 import math
 
 from . import fuselage as fus_mod
+from . import motor as motor_mod
 
 
 def _num(value, default=0.0):
@@ -44,16 +45,26 @@ def spinner_params(res):
     motor_r = min(width, height) * 0.22
     if motor_r <= 1.0:
         return None
+    # спинерът и каулингът побират камбаната на избрания мотор (motor.py)
+    radius = max(2.0, motor_r * 1.05, motor_mod.bay_radius(res))
+
+    def half_width(t):
+        return 0.5 * width * fus_mod.radius_factor(
+            t, _num(fus.get("nose_ratio"), 0.14),
+            _num(fus.get("cabin_ratio"), 0.42),
+            _num(fus.get("tail_taper"), 0.38))
+
+    # каулингът свършва там, където тялото е поне колкото него
+    t_c1 = 0.05
+    while half_width(t_c1) < radius and t_c1 < 0.12:
+        t_c1 += 0.005
     return {
         "x_tip": -0.045 * length,
         "x_base": 0.012 * length,
-        "radius": max(2.0, motor_r * 1.05),
+        "radius": radius,
         # каулингът свързва спинера с кожата на тялото
         "x_cowl0": 0.008 * length,
-        "x_cowl1": 0.050 * length,
-        "r_cowl1": 0.5 * width * fus_mod.radius_factor(
-            0.05, _num(fus.get("nose_ratio"), 0.14),
-            _num(fus.get("cabin_ratio"), 0.42),
-            _num(fus.get("tail_taper"), 0.38)),
+        "x_cowl1": t_c1 * length,
+        "r_cowl1": max(half_width(t_c1), radius),
         "z_center": 0.5 * height,
     }

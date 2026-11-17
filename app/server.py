@@ -23,6 +23,12 @@ from core import layout
 from core import materials
 from core import export_job
 from core import presets
+from core import printgeom
+from core import profiles
+from core import catalog as catalog_mod
+from core import controls
+from core import motor
+from core import propeller as propeller_mod
 from core import report
 from core import settings as app_settings
 from core import solidcraft_export
@@ -223,8 +229,41 @@ def reset_settings():
 # Изчисления
 # --------------------------------------------------------------------------
 @eel.expose
-def compute_design(inputs):
-    """Пълно изчисление (връща dict за UI)."""
+def profile_costs(inputs):
+    """
+    Сравнение на профилите (Бюджет / Стандарт / Хай-енд) за текущия дизайн.
+    Смята се на заявка (не при всяко редактиране), защото са три пълни изчисления.
+    """
+    if inputs is not None and not isinstance(inputs, dict):
+        return {"ok": False, "error": "очаквах обект (dict)"}
+    rows = []
+    for key, prof in profiles.PROFILES.items():
+        try:
+            res = design_mod.compute(profiles.apply(inputs or {}, key))
+        except Exception as exc:  # noqa: BLE001
+            rows.append({"key": key, "label": prof["label"], "ok": False,
+                         "error": "%s: %s" % (type(exc).__name__, exc)})
+            continue
+        if not res.get("ok"):
+            rows.append({"key": key, "label": prof["label"], "ok": False,
+                         "error": res.get("error", "грешка в изчислението")})
+            continue
+        bom = res["bom"]
+        rows.append({
+            "key": key,
+            "label": prof["label"],
+            "ok": True,
+            "total_eur": bom["total_eur"],
+            "print_eur": bom["print_eur"],
+            "structure_eur": bom["structure_eur"],
+            "electronics_eur": bom["electronics_eur"],
+            "ready": bool(res["stability"].get("ready_to_fly")),
+        })
+    return {"ok": True, "rows": rows}
+
+
+def _compute(inputs):
+    """Пълно изчисление (общо за UI, отчетите и експорта)."""
     if inputs is not None and not isinstance(inputs, dict):
         return {"ok": False,
                 "error": "Очаквах обект с входни данни (dict), получено: %s"
@@ -238,9 +277,35 @@ def compute_design(inputs):
 
 
 @eel.expose
+def compute_design(inputs):
+    """
+    Пълно изчисление за UI. Добавя `structure_view` — схемата „спар и
+    джойнер“ (кореново сечение), смятана от същата геометрия като експорта.
+    Отчетите и експортът ползват _compute и не я съдържат.
+    """
+    res = _compute(inputs)
+    if res.get("ok"):
+        try:
+            res["servos"] = controls.servo_sizing(res)
+        except Exception:  # noqa: BLE001 — оразмеряването е само подсказка
+            res["servos"] = None
+        try:
+            res["motor_view"] = motor.summary(res)
+        except Exception:  # noqa: BLE001 — размерът на мотора е само подсказка
+            res["motor_view"] = None
+        try:
+            res["structure_view"] = printgeom.spar_section(res)
+        except Exception:  # noqa: BLE001 — схемата не бива да спира изчислението
+            import traceback
+            traceback.print_exc()
+            res["structure_view"] = None
+    return res
+
+
+@eel.expose
 def export_report(inputs):
     """Изчислява и записва отчет + BOM + JSON в exports/."""
-    res = compute_design(inputs)
+    res = _compute(inputs)
     if not res.get("ok"):
         return res
     try:
@@ -259,7 +324,7 @@ def get_model3d(inputs):
 
     Връща триъгълници по части: крило, фюзелаж, стабилизатор, кил, мотор.
     """
-    res = compute_design(inputs)
+    res = _compute(inputs)
     if not res.get("ok"):
         return res
     try:
@@ -279,7 +344,7 @@ def export_plan(inputs, options=None):
     Връща задача (`job`) и списък стъпки с оценка, за да може панелът да
     покаже какво предстои още преди първото чакане.
     """
-    res = compute_design(inputs)
+    res = _compute(inputs)
     if not res.get("ok"):
         return res
     try:
@@ -332,7 +397,7 @@ def export_preview(job):
     if not path or not os.path.exists(path):
         return None
     root = os.path.abspath(EXPORT_DIR)
-    if not os.path.abspath(path).startswith(root):
+    if not _inside(path, root):
         return None
     try:
         with open(path, "rb") as f:
@@ -350,7 +415,7 @@ def export_solidcraft(inputs, options=None):
     Ползва се от скриптове и тестове; UI-ят вика `export_plan` +
     `export_step`, за да показва прогрес.
     """
-    res = compute_design(inputs)
+    res = _compute(inputs)
     if not res.get("ok"):
         return res
     try:
@@ -461,6 +526,14 @@ def open_folder(which="exports"):
         return {"ok": False, "error": str(exc)}
 
 
+def _inside(path, root):
+    """True само ако `path` е самата `root` или е вътре в нея (не префикс на името)."""
+    try:
+        return os.path.commonpath([os.path.abspath(path), os.path.abspath(root)]) == os.path.abspath(root)
+    except ValueError:  # различни дялове на Windows
+        return False
+
+
 @eel.expose
 def open_export(path):
     """
@@ -470,7 +543,7 @@ def open_export(path):
     """
     base = os.path.abspath(EXPORT_DIR)
     target = os.path.abspath(str(path or ""))
-    if not target.startswith(base):
+    if not _inside(target, base):
         return {"ok": False, "error": "пътят е извън папката с отчети"}
     if not os.path.isdir(target):
         return {"ok": False, "error": "няма такава папка: %s" % target}
@@ -482,6 +555,103 @@ def open_export(path):
             subprocess.Popen(["xdg-open", target])
         return {"ok": True, "path": target}
     except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)}
+
+
+# --------------------------------------------------------------------------
+# Витла за 3D печат (APC геометрия от папка PE0-FILES_WEB)
+# --------------------------------------------------------------------------
+PROP_DIR = os.path.join(PROJECT_DIR, "PE0-FILES_WEB")
+PROP_EXPORT_DIR = os.path.join(EXPORT_DIR, "propellers")
+
+
+def _prop_path(name):
+    """Път към APC файл — само директно в PROP_DIR, без подпапки."""
+    base = os.path.basename(str(name or ""))
+    if not base.upper().endswith(".PE0"):
+        raise ValueError("не е APC геометрия")
+    path = os.path.abspath(os.path.join(PROP_DIR, base))
+    if not _inside(path, PROP_DIR) or not os.path.isfile(path):
+        raise ValueError("няма такъв файл: %s" % base)
+    return path
+
+
+def _read_prop(name):
+    path = _prop_path(name)
+    with open(path, encoding="latin-1") as fh:
+        return path, fh.read()
+
+
+@eel.expose
+def list_propellers():
+    """Списък с APC витла от PE0-FILES_WEB."""
+    if not os.path.isdir(PROP_DIR):
+        return {"ok": False, "error": "липсва папка PE0-FILES_WEB", "items": []}
+    items = []
+    for fname in sorted(os.listdir(PROP_DIR)):
+        if fname.upper().endswith(".PE0"):
+            label = fname[:-4]
+            if label.upper().endswith("-PERF"):
+                label = label[:-5]
+            items.append({"name": fname, "label": label})
+    return {"ok": True, "items": items}
+
+
+@eel.expose
+def propeller_summary(name, rpm, material="pla", infill=1.0, bed=None):
+    """Маса, цена, проверки за натоварване и побиране на леглото."""
+    try:
+        _, text = _read_prop(name)
+        bed_mm = tuple(float(v) for v in bed) if bed else None
+        out = propeller_mod.summarize(text, float(rpm), str(material),
+                                      float(infill), bed_mm)
+        return {"ok": True, "summary": out}
+    except (ValueError, propeller_mod.PropellerError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@eel.expose
+def export_propeller_stl(name):
+    """Записва STL на перката в exports/propellers/ (mm)."""
+    try:
+        path, text = _read_prop(name)
+        geom = propeller_mod.parse_geometry(text)
+        os.makedirs(PROP_EXPORT_DIR, exist_ok=True)
+        stem = os.path.splitext(os.path.basename(path))[0]
+        target = os.path.join(PROP_EXPORT_DIR, stem + ".stl")
+        count = propeller_mod.write_stl(target, geom)
+        return {"ok": True, "path": target, "triangles": count}
+    except (ValueError, propeller_mod.PropellerError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+# --------------------------------------------------------------------------
+# Каталог на цени (catalog.json до приложението)
+# --------------------------------------------------------------------------
+CATALOG_PATH = os.path.join(PROJECT_DIR, catalog_mod.CATALOG_NAME)
+catalog_mod.apply(catalog_mod.read(CATALOG_PATH))
+
+
+@eel.expose
+def get_catalog():
+    return {"ok": True, **catalog_mod.effective()}
+
+
+@eel.expose
+def save_catalog(payload):
+    try:
+        catalog_mod.save(CATALOG_PATH, payload)
+        return {"ok": True, **catalog_mod.effective()}
+    except (ValueError, OSError) as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+@eel.expose
+def reset_catalog():
+    try:
+        catalog_mod.reset(CATALOG_PATH)
+        return {"ok": True, **catalog_mod.effective()}
+    except OSError as exc:
         return {"ok": False, "error": str(exc)}
 
 

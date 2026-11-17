@@ -6,6 +6,7 @@ from . import aero
 from . import layout
 from . import presets
 from . import printcost
+from . import structmat
 
 
 def _check(level, title, detail):
@@ -407,6 +408,52 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                                 st["cap_area_req_mm2"],
                                 st["spar_height_mm"], st["m_root_nm"])))
 
+    joiner = st.get("joiner_tube") or {}
+    if joiner.get("material", "carbon") != "carbon":
+        jname = structmat.get(joiner["material"])["name"]
+        if not joiner.get("od_mm"):
+            checks.append(_check("error", "Джойнер: няма профил в каталога",
+                                 "%s не издържа при огъващия момент от %.1f "
+                                 "N·m в нито един профил. Смени материала "
+                                 "или намали масата." % (jname, st["m_ult_nm"])))
+        elif joiner.get("stress_mpa") is not None and \
+                joiner["stress_mpa"] > joiner["allow_mpa"]:
+            checks.append(_check("error", "Джойнер (%s): трайно огъване"
+                                 % jname,
+                                 "%.0f MPa при допустимо %.0f MPa."
+                                 % (joiner["stress_mpa"], joiner["allow_mpa"])))
+        else:
+            checks.append(_check("ok", "Джойнер (%s)" % jname,
+                                 "Ø%.0f/%.0f mm, %.0f MPa при допустимо %.0f MPa."
+                                 % (joiner["od_mm"], joiner["id_mm"],
+                                    joiner["stress_mpa"], joiner["allow_mpa"])))
+    if not st.get("adhesive_ok", True):
+        checks.append(_check("error", "Лепилна връзка на джойнера",
+                             "Срязване %.1f MPa при допустимо %.1f MPa за "
+                             "лепилото. Увеличи дължината на джойнера или "
+                             "избери по-дебел профил."
+                             % (st["adhesive_shear_mpa"],
+                                structmat.ADHESIVE_SHEAR_ALLOW_MPA)))
+    else:
+        checks.append(_check("ok", "Лепилна връзка на джойнера",
+                             "Срязване %.2f MPa при допустимо %.0f MPa "
+                             "(епоксид, ориентировъчно)."
+                             % (st["adhesive_shear_mpa"],
+                                structmat.ADHESIVE_SHEAR_ALLOW_MPA)))
+
+    if not st.get("compression_ok", True):
+        checks.append(_check("error", "Печатаният капс не издържа на натиск",
+                             "Напрежение %.1f MPa при допустимо %.1f MPa. "
+                             "Увеличи ширината на капса или добави карбон."
+                             % (st["cap_compression_mpa"],
+                                st["compression_allow_mpa"])))
+    if not st.get("buckling_ok", True):
+        checks.append(_check("warn", "Локално изкълчване на капса",
+                             "Напрежение %.1f MPa при критично %.1f MPa. "
+                             "Увеличи дебелината на стената или добави "
+                             "карбон." % (st["cap_compression_mpa"],
+                                          st["buckling_stress_mpa"])))
+
     if not st["wall_ok"]:
         checks.append(_check("error", "Прекалено тънка стена",
                              "%.2f mm при минимум %.2f mm за тази дюза."
@@ -422,6 +469,16 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
     # 12. Печат
     for problem in printcost.fit_problems(geom, tail, fus, cfg):
         checks.append(_check("error", "Печат: частта не се побира", problem))
+    plan = printcost.split_plan(geom, tail, cfg)
+    if plan["wing_chord_pieces"] > 1 or plan["tail_chord_pieces"] > 1 \
+            or plan["tail_height_pieces"] > 1:
+        checks.append(_check(
+            "info", "Части с разрез за леглото",
+            "Крилото: %d по размаха × %d по хорда; опашката: %d по хорда × "
+            "%d по височина. Съединява се с джойнер и лепило (проверката на "
+            "лепилната връзка е във Фаза 2)."
+            % (plan["wing_span_pieces"], plan["wing_chord_pieces"],
+               plan["tail_chord_pieces"], plan["tail_height_pieces"])))
     if cfg.get("infill", 0) > 40:
         checks.append(_check(
             "warn", "Висок infill",
@@ -435,10 +492,9 @@ def build_checks(cfg, geom, stall, spec, cg_res, st, summary, total_g,
                              % (total_h, summary["pieces"])))
     else:
         checks.append(_check("ok", "Печат",
-                             "~%.1f часа, %.0f g филамент, %.0f €, "
-                             "%d части."
+                             "~%.1f часа, %.0f g филамент, %d части."
                              % (total_h, summary["total_mass_g"],
-                                summary["cost"], summary["pieces"])))
+                                summary["pieces"])))
 
     if not fus.get("battery_fits", True):
         checks.append(_check("warn", "Батерията не влиза в носа",

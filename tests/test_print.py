@@ -1,4 +1,4 @@
-"""
+﻿"""
 Тестове за модела на печат (маса, филамент, време, цена).
 """
 
@@ -152,14 +152,28 @@ class TestAirframeEstimate(unittest.TestCase):
 
 
 class TestBedFit(unittest.TestCase):
-    def test_too_large_chord_is_reported(self):
+    def test_too_large_chord_is_split_not_an_error(self):
         from core import aero
         geom = aero.wing_geometry(0.60, 4.5, 0.50)
         fus = {"width_mm": 50.0, "height_mm": 62.0, "length_mm": 900.0}
         cfg = {"bed": [220, 220, 250]}
-        problems = printcost.fit_problems(geom, {}, fus, cfg)
-        self.assertTrue(any("Кореновият хорд" in p for p in problems),
-                        problems)
+        self.assertEqual(printcost.fit_problems(geom, {}, fus, cfg), [])
+        plan = printcost.split_plan(geom, {}, cfg)
+        self.assertGreaterEqual(plan["wing_chord_pieces"], 2, plan)
+
+    def test_split_adds_pieces_to_the_estimate(self):
+        from core import aero
+        geom = aero.wing_geometry(0.60, 4.5, 0.50)
+        fus = {"width_mm": 50.0, "height_mm": 62.0, "length_mm": 900.0}
+        from core import materials
+        fil = materials.get(list(materials.FILAMENTS)[0])
+        small = printcost.estimate_airframe(
+            geom, {}, fus, {"bed": [220, 220, 250]}, fil)
+        big = printcost.estimate_airframe(
+            geom, {}, fus, {"bed": [400, 400, 400]}, fil)
+        def wing_pieces(parts):
+            return [p["pieces"] for p in parts if p["name"].startswith("Крило")][0]
+        self.assertGreater(wing_pieces(small), wing_pieces(big))
 
     def test_normal_trainer_fits(self):
         from core import aero

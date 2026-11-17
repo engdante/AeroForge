@@ -7,6 +7,34 @@ function pctOrNull(value) {
   return (value === null || value === undefined) ? null : value / 100;
 }
 
+/** Имена на конструктивните материали (ключове от ядрото). */
+const MATERIAL_LABELS = {
+  carbon: "Карбон", aluminium: "Алуминий", fibreglass: "Стъклопласт",
+  steel: "Стомана", wood: "Дърво",
+};
+
+/**
+ * Към кой таб на панела се отнася дадена проверка (по заглавието ѝ).
+ * Редът е важен: първото съвпадение печели (напр. „деформация на крилото“
+ * е конструкция, не крило).
+ */
+const CHECK_TABS = [
+  ["structure",
+    /спар|джойнер|лепилн|капс|стена|деформация|изкълчване|карбон|коравин/i],
+  ["wing", /профил|reflex/i],
+  ["fuselage", /фюзелаж|носа|къс нос|тялото/i],
+  ["payload", /товар|масов|батерия в списъка|баланс|разместване/i],
+  ["power", /тяга|тягата|мощност|батерия|време на полет|по-малко време|витл|esc/i],
+  ["tail", /опашк|V_h|V_v|статичен запас|център на тежестта|ЦТ/i],
+  ["print", /печат|конструкция|infill/i],
+  ["wing", /крило|рейнолдс|загуба|хвърляне|профил|reflex/i],
+];
+
+function checkTab(title) {
+  const hit = CHECK_TABS.find(([, re]) => re.test(title || ""));
+  return hit ? hit[0] : null;
+}
+
 const UI = {
   presets: null,
 
@@ -89,7 +117,7 @@ const UI = {
     fill("tailType", lay.tail_types);
     fill("tailPlanform", lay.tail_planforms);
     fill("tailTipStyle", lay.tail_tip_styles);
-    fill("tailAirfoil", p.airfoils);
+    fill("tailAirfoil", p.airfoils, "name");
     fill("tipStyle", p.tip_styles);
     // плъзгачът на отместването: ±44% от височината на тялото
     const limitPct = Math.round((lay.wing_offset_limit || 0.44) * 100);
@@ -152,8 +180,7 @@ const UI = {
     const f = this.presets.filaments.find((x) => x.key === key);
     if (!f) return;
     this.$("filamentInfo").textContent =
-      `${f.notes} Плътност ${f.printed_density.toFixed(2)} g/cm³, ` +
-      `~${f.price_per_kg} €/kg.`;
+      `${f.notes} Плътност ${f.printed_density.toFixed(2)} g/cm³.`;
   },
 
   updateAirfoilInfo() {
@@ -272,6 +299,10 @@ const UI = {
     const bedX = this._num("bedX") || 220;
     const bedY = this._num("bedY") || 220;
     const bedZ = this._num("bedZ") || 250;
+    // Празно поле = подразбиращото се за нов дизайн (10 mm); виж writeInputs
+    // за стари дизайни, където липсващият ключ значи 0.
+    const wingGap = this._num("wingRootGap");
+    const tailGap = this._num("tailRootGap");
 
     return {
       name: this.$("designName").value.trim() || "Нов дизайн",
@@ -300,9 +331,21 @@ const UI = {
           chord_mm: null,
         },
         airfoil: this.$("airfoilSelect").value,
-        wing_le_ratio: wingLePct === null ? 0.30 : wingLePct / 100,
+        // елерони в проценти (празно = авто, хорда 0 = без елерони)
+        ailerons: {
+          chord_frac: this._num("aileronChord"),
+          start_frac: this._num("aileronStart"),
+          end_frac: this._num("aileronEnd"),
+        },
+        // празно = автоматично позициониране (null)
+        wing_le_ratio: wingLePct === null ? null : wingLePct / 100,
       },
       tail: {
+        // кормила в проценти (празно = авто, 0 = без)
+        controls: {
+          elevator_frac: this._num("elevatorChord"),
+          rudder_frac: this._num("rudderChord"),
+        },
         type: this.$("tailType").value || "conventional",
         vh: this._num("vh"),
         vv: this._num("vv"),
@@ -330,6 +373,8 @@ const UI = {
         propulsion: this.$("propulsionLayout").value || "tractor",
         // отместване на крилото от средното положение, mm (+ нагоре)
         wing_offset_mm: this._num("wingOffset"),
+        wing_root_gap_mm: wingGap === null ? 10 : wingGap,
+        tail_root_gap_mm: tailGap === null ? 10 : tailGap,
       },
       propulsion: {
         cells: this._num("cells") || 3,
@@ -350,6 +395,11 @@ const UI = {
       structure: {
         n_limit: this._num("nLimit"),
         safety_factor: this._num("safetyFactor") || 1.5,
+        spar_material: this.$("sparMaterial").value,
+        joiner_material: this.$("joinerMaterial").value,
+      },
+      bom: {
+        profile: this.$("profileSelect").value || null,
       },
     };
   },
@@ -390,8 +440,20 @@ const UI = {
     set("wingletCant", wl.cant_deg);
     set("wingletToe", wl.toe_deg);
     this.syncWinglet();
-    set("wingLeRatio", Math.round((wing.wing_le_ratio !== undefined
-      ? wing.wing_le_ratio : 0.30) * 100));
+    const tcIn = ((inp.tail || {}).controls) || {};
+    const pctT = (v) => (v === null || v === undefined) ? null
+      : Math.round((v > 1 ? v : v * 100) * 10) / 10;
+    set("elevatorChord", pctT(tcIn.elevator_frac));
+    set("rudderChord", pctT(tcIn.rudder_frac));
+    const ail = wing.ailerons || {};
+    const pct = (v) => (v === null || v === undefined) ? null
+      : Math.round((v > 1 ? v : v * 100) * 10) / 10;
+    set("aileronChord", pct(ail.chord_frac));
+    set("aileronStart", pct(ail.start_frac));
+    set("aileronEnd", pct(ail.end_frac));
+    const wlr = wing.wing_le_ratio;
+    set("wingLeRatio", (wlr === null || wlr === undefined)
+      ? null : Math.round(wlr * 100));
     if (wing.airfoil) this.$("airfoilSelect").value = wing.airfoil;
 
     const tail = inp.tail || {};
@@ -428,6 +490,10 @@ const UI = {
     if (lay.wing_offset_mm !== null && lay.wing_offset_mm !== undefined) {
       this.setWingOffset(lay.wing_offset_mm);
     }
+    // Старите дизайни нямат тези ключове: тогава луфт е 0 (крилото/опашката
+    // са били неделима част от модела), а не новото подразбиране 10 mm.
+    set("wingRootGap", lay.wing_root_gap_mm === undefined ? 0 : lay.wing_root_gap_mm);
+    set("tailRootGap", lay.tail_root_gap_mm === undefined ? 0 : lay.tail_root_gap_mm);
 
     const power = inp.propulsion || {};
     set("cells", power.cells || 3);
@@ -451,6 +517,8 @@ const UI = {
     const structure = inp.structure || {};
     set("nLimit", structure.n_limit);
     set("safetyFactor", structure.safety_factor || 1.5);
+    this.$("sparMaterial").value = structure.spar_material || "carbon";
+    this.$("joinerMaterial").value = structure.joiner_material || "carbon";
 
     this.updateMissionInfo();
     this.updateFilamentInfo();
@@ -471,7 +539,8 @@ const UI = {
       if (!el) return;
       el.disabled = !active;
       if (el.parentElement) {
-        el.parentElement.classList.toggle("is-muted", !active);
+        // Скрито, а не само затъмнено: при друг тип връх няма какво да се въвежда.
+        el.parentElement.style.display = active ? "" : "none";
       }
     });
     const hint = this.$("wingletHint");
@@ -525,6 +594,72 @@ const UI = {
     setPh("fusTaper", fmt(fus.tail_taper * 100, 0));
     setPh("fusHeightRatio", fmt(fus.height_ratio, 2));
     setPh("vTailDeg", fmt((res.layout || {}).v_tail_deg, 0));
+    const tc = g.tail_controls || {};
+    const el = tc.elevator || {};
+    const ru = tc.rudder || {};
+    setPh("elevatorChord", fmt((el.auto_frac || 0) * 100, 0));
+    setPh("rudderChord", fmt((ru.auto_frac || 0) * 100, 0));
+    const vTail = el.kind === "ruddervator";
+    const elLabel = this.$("elevatorChordLabel");
+    if (elLabel) {
+      elLabel.textContent = vTail ? "Руддерватор — хорда (%)"
+        : "Кормило за височина — хорда (%)";
+    }
+    const rudderField = this.$("rudderChord");
+    if (rudderField && rudderField.parentElement) {
+      // при V-опашка посоката е в руддерваторите
+      rudderField.parentElement.style.display = vTail ? "none" : "";
+    }
+    const tcHint = this.$("tailControlsHint");
+    if (tcHint) {
+      const srv = ((res.servos || {}).surfaces || []);
+      const servoText = (key) => {
+        const x = srv.find((s) => s.key === key);
+        return x ? ` — серво ${x.servo.label}, нужни ${fmt(x.torque_kgcm, 2)}` +
+          ` kg·cm (запас ×${fmt(x.margin, 1)})` : "";
+      };
+      if (!(res.mission || {}).has_tail) {
+        tcHint.textContent = "Крило без опашка: управлението е с елевоните.";
+      } else if (vTail) {
+        tcHint.textContent = el.enabled
+          ? `Руддерватори ${fmt(el.chord_frac * 100, 0)} % от хордата на ` +
+            `всеки панел (височина + посока, смесени в предавателя)` +
+            servoText("ruddervator") + "."
+          : "Без руддерватори.";
+      } else {
+        const parts = [];
+        parts.push(el.enabled
+          ? `Височина ${fmt(el.chord_frac * 100, 0)} %, две половини, едно ` +
+            `серво с две тяги` + servoText("elevator")
+          : "без кормило за височина");
+        parts.push(ru.enabled
+          ? `посока ${fmt(ru.chord_frac * 100, 0)} %` + servoText("rudder")
+          : "без кормило за посока");
+        tcHint.textContent = parts.join("; ") + ".";
+      }
+    }
+    const ail = g.ailerons || {};
+    const ailAuto = ail.auto || {};
+    setPh("aileronChord", fmt((ailAuto.chord_frac || 0) * 100, 0));
+    setPh("aileronStart", fmt((ailAuto.start_frac || 0) * 100, 0));
+    setPh("aileronEnd", fmt((ailAuto.end_frac || 0) * 100, 0));
+    const ailHint = this.$("aileronHint");
+    if (ailHint) {
+      ailHint.textContent = ail.enabled
+        ? `${ail.kind === "elevon" ? "Елевони" : "Елерони"}: ` +
+          `${fmt0(ail.span_mm)} mm по размаха, хорда ` +
+          `${fmt0(ail.chord_inboard_mm)}→${fmt0(ail.chord_outboard_mm)} mm, ` +
+          `${fmt(ail.area_ratio * 100, 1)} % от площта на крилото ` +
+          `(процеп ${fmt(ail.hinge_gap_mm, 1)} mm по пантата).`
+        : "Без елерони (хорда 0).";
+      const servos = ((res.servos || {}).surfaces || [])
+        .find((s) => s.key === "aileron" || s.key === "elevon");
+      if (servos) {
+        ailHint.textContent += ` Серво: ${servos.servo.label} — нужни ` +
+          `${fmt(servos.torque_kgcm, 2)} kg·cm, има ` +
+          `${fmt(servos.servo.torque_kgcm, 1)} (запас ×${fmt(servos.margin, 1)}).`;
+      }
+    }
 
     const hint = this.$("fusHint");
     if (hint) {
@@ -554,8 +689,18 @@ const UI = {
     }
     const airfoilHint = this.$("tailAirfoilHint");
     if (airfoilHint && res.geometry && res.geometry.tail_airfoil) {
-      airfoilHint.textContent = "Профил: " + res.geometry.tail_airfoil +
-        " (симетричен е най-добре за опашка).";
+      const g = res.geometry;
+      const nameOf = (key) => {
+        const af = ((this.presets || {}).airfoils || []).find((x) => x.key === key);
+        return af ? af.name : key;
+      };
+      const vTail = (res.layout || {}).tail_type === "v_tail";
+      airfoilHint.textContent = vTail
+        ? `Профил на V-опашката: ${nameOf(g.tail_airfoil)}.`
+        : `Хоризонтална опашка: ${nameOf(g.tail_airfoil)}. Килът е винаги ` +
+          `със симетричен профил: ${nameOf(g.fin_airfoil || g.tail_airfoil)}` +
+          (g.fin_airfoil && g.fin_airfoil !== g.tail_airfoil
+            ? " (най-близката дебелина)." : ".");
     }
     this.syncWingOffset(res);
   },
@@ -634,6 +779,295 @@ const UI = {
     }
   },
 
+  /** Прилага готов комплект материали върху полетата на конструкцията. */
+  applyProfile(key) {
+    const profiles = {
+      budget: { filament: "pla", spar: "aluminium", joiner: "aluminium",
+                bed: "220x220x250" },
+      standard: { filament: "pla_plus", spar: "carbon", joiner: "carbon",
+                  bed: "220x220x250" },
+      highend: { filament: "lw_pla", spar: "carbon", joiner: "carbon",
+                 bed: "256x256x256" },
+    };
+    const p = profiles[key];
+    if (!p) return;
+    this.$("filamentSelect").value = p.filament;
+    this.$("sparMaterial").value = p.spar;
+    this.$("joinerMaterial").value = p.joiner;
+    this.$("bedPreset").value = p.bed;
+    this.applyBedPreset(p.bed);
+    this.updateFilamentInfo();
+  },
+
+  /** Готов размер на леглото → полетата bedX/bedY/bedZ. */
+  applyBedPreset(value) {
+    if (!value) return;
+    const [x, y, z] = value.split("x").map(Number);
+    this.$("bedX").value = x;
+    this.$("bedY").value = y;
+    this.$("bedZ").value = z;
+  },
+
+  /**
+   * Точка на таба, когато проверка с предупреждение/грешка се отнася до
+   * него. Цветът е по най-тежкото ниво; подсказката изброява проверките.
+   */
+  markTabs(checks) {
+    const rank = { warn: 1, error: 2 };
+    const byTab = {};
+    checks.forEach((c) => {
+      if (!rank[c.level]) return;
+      const tab = checkTab(c.title);
+      if (!tab) return;
+      const entry = byTab[tab] || (byTab[tab] = { level: "warn", titles: [] });
+      if (rank[c.level] > rank[entry.level]) entry.level = c.level;
+      entry.titles.push((c.level === "error" ? "✖ " : "⚠ ") + c.title);
+    });
+    document.querySelectorAll(".tab-btn").forEach((btn) => {
+      const entry = byTab[btn.dataset.tab];
+      btn.classList.toggle("has-warn", !!entry && entry.level === "warn");
+      btn.classList.toggle("has-error", !!entry && entry.level === "error");
+      btn.title = entry ? entry.titles.join("\n") : "";
+    });
+  },
+
+  /** Кратко описание на спара и джойнера под схемата. */
+  renderSparInfo(view, st) {
+    const box = this.$("sparInfo");
+    if (!box) return;
+    box.innerHTML = "";
+    if (!view || !st) return;
+    const cap = view.cap;
+    const carbon = view.carbon;
+    const j = view.joiner;
+    const rows = [
+      ["Печатани капси",
+        `${cap.strips === 2 ? "2 ленти × " + fmt(cap.strip_width_mm, 1)
+          : fmt(cap.width_mm, 1)} mm × ${fmt(cap.thickness_mm, 1)} mm, ` +
+        `горе и долу на ${fmt0(cap.x_mm)} mm от предния ръб`],
+      ["Височина на спара", `${fmt(view.spar_height_mm, 1)} mm`],
+      ["Лента (спар)", carbon.needed
+        ? `${MATERIAL_LABELS[carbon.material] || carbon.material} ` +
+          `${fmt(carbon.width_mm, 1)}×${fmt(carbon.thickness_mm, 1)} mm × ` +
+          `${carbon.count} — в процепа на капса` +
+          (st.carbon_for_stiffness ? " (за коравина)" : "")
+        : "не е нужна — печатаните капси стигат"],
+    ];
+    if (j) {
+      rows.push(["Джойнер",
+        `${MATERIAL_LABELS[j.material] || j.material} тръба ` +
+        `⌀${fmt(j.od_mm, 1)}/${fmt(j.id_mm, 1)} mm × ${fmt0(j.length_mm)} mm` +
+        (j.count > 1 ? ` (${j.count} бр.)` : "")]);
+      rows.push(["Канал в крилото",
+        `⌀${fmt(j.bore_mm, 1)} mm, дълбок ${fmt0(j.depth_mm)} mm, ` +
+        `на ${fmt0(j.x_mm)} mm от предния ръб`]);
+      rows.push(["Стена до повърхността",
+        `${fmt(j.wall_margin_mm, 1)} mm ` + (j.ok ? "✓" : "⚠ твърде тънка")]);
+    } else {
+      rows.push(["Джойнер", "няма (без съединителна тръба)"]);
+    }
+    const table = this.el("table", "kv");
+    this.fillKv(table, rows);
+    box.appendChild(table);
+  },
+
+  /**
+   * Числата зад графиките: от кривите (v, ld, p_req, p_avail) и aero.
+   * Ползват се за маркерите и за прозореца „ⓘ“ с обясненията.
+   */
+  chartFacts(res) {
+    const c = (res && res.curves) || {};
+    const a = (res && res.aero) || {};
+    const v = c.v || [];
+    const ok = (x) => x !== null && x !== undefined && Number.isFinite(x);
+    const at = (arr, x) => {
+      // линейна интерполация по скоростта
+      for (let i = 1; i < v.length; i++) {
+        if (v[i] >= x) {
+          const y0 = arr[i - 1], y1 = arr[i];
+          if (!ok(y0) || !ok(y1)) return null;
+          const t = (x - v[i - 1]) / ((v[i] - v[i - 1]) || 1);
+          return y0 + t * (y1 - y0);
+        }
+      }
+      return null;
+    };
+    const facts = {};
+    const ld = c.ld || [];
+    let best = -1;
+    ld.forEach((x, i) => { if (ok(x) && (best < 0 || x > ld[best])) best = i; });
+    if (best >= 0) { facts.ldMax = ld[best]; facts.vBestLd = v[best]; }
+    if (a.v_best_ld_ms) facts.vBestLd = a.v_best_ld_ms;
+    if (a.ld_max) facts.ldMax = a.ld_max;
+    const req = c.p_req || [];
+    const avail = c.p_avail || [];
+    let pMin = -1;
+    req.forEach((x, i) => { if (ok(x) && (pMin < 0 || x < req[pMin])) pMin = i; });
+    if (pMin >= 0) { facts.pReqMin = req[pMin]; facts.vMinPower = v[pMin]; }
+    // V_max: най-високата скорост, при която наличната ≥ нужната
+    for (let i = 0; i < v.length; i++) {
+      if (ok(avail[i]) && ok(req[i]) && avail[i] >= req[i]) facts.vMax = v[i];
+    }
+    const vc = a.v_cruise_ms;
+    if (vc) {
+      facts.ldCruise = at(ld, vc);
+      facts.pReqCruise = at(req, vc);
+      facts.pAvailCruise = at(avail, vc);
+      const massKg = (((res || {}).weights || {}).total_g || 0) / 1000;
+      if (ok(facts.pReqCruise) && ok(facts.pAvailCruise) && massKg > 0) {
+        facts.pExcess = facts.pAvailCruise - facts.pReqCruise;
+        facts.climb = facts.pExcess / (massKg * 9.81);
+      }
+    }
+    return facts;
+  },
+
+  /** Съдържанието на прозореца „ⓘ“ за графика (kind = "ld" | "power"). */
+  chartInfoHtml(kind, res) {
+    const a = (res && res.aero) || {};
+    const f = this.chartFacts(res);
+    const n = (x, d) => (x === null || x === undefined || !Number.isFinite(x))
+      ? "—" : fmt(x, d);
+    const kmh = (x) => (x ? " (" + fmt(x * 3.6, 0) + " km/h)" : "");
+    if (kind === "ld") {
+      return [
+        "<h4>Какво показва</h4>",
+        "<p><b>Аеродинамичното качество L/D</b> е отношението на подемната",
+        "сила към челното съпротивление при всяка скорост на хоризонтален",
+        "полет. То показва колко метра планира моделът напред за всеки метър",
+        "височина, ако моторът спре.</p>",
+        "<h4>Оси</h4><ul>",
+        "<li><b>X — скорост V, m/s</b> (1 m/s = 3.6 km/h).</li>",
+        "<li><b>Y — L/D</b>, без мерна единица (отношение на две сили).</li></ul>",
+        "<h4>Защо кривата има максимум</h4>",
+        "<p>При ниска скорост крилото работи с голям ъгъл на атака и",
+        "<b>индуктивното</b> съпротивление (вихрите от върховете на крилото) е",
+        "голямо. При висока скорост расте <b>паразитното</b> съпротивление",
+        "(триене и форма), пропорционално на V². Максимумът е там, където",
+        "двете са равни.</p>",
+        "<h4>Маркерите за този дизайн</h4><ul>",
+        "<li><b>V_stall</b> " + n(a.v_stall_ms, 1) + " m/s" + kmh(a.v_stall_ms) +
+          " — скорост на загуба на подемна сила; под нея моделът пада.</li>",
+        "<li><b>Макс. L/D</b> " + n(f.ldMax, 1) + " при " + n(f.vBestLd, 1) +
+          " m/s" + kmh(f.vBestLd) + " — най-доброто планиране: от 100 m " +
+          "височина ~" + n((f.ldMax || 0) * 100, 0) + " m напред.</li>",
+        "<li><b>Крейсер</b> " + n(a.v_cruise_ms, 1) + " m/s" + kmh(a.v_cruise_ms) +
+          " — L/D " + n(f.ldCruise, 1) + ".</li>",
+        "<li>Снижаване при планиране с най-добро L/D: ~" + n(a.sink_rate_ms, 2) +
+          " m/s.</li></ul>",
+        "<h4>Как да го четеш</h4><ul>",
+        "<li>Крейсер близо до максимума = ефективен полет и по-дълго време на батерията.</li>",
+        "<li>Крейсер доста вдясно = бърз модел, но харчи повече енергия.</li>",
+        "<li>По-голямо разтежение (AR) и по-гладко тяло вдигат кривата нагоре.</li></ul>",
+      ].join("\n");
+    }
+    return [
+      "<h4>Какво показва</h4>",
+      "<p>Две криви на мощността при хоризонтален полет:</p><ul>",
+      "<li><b>Нужна</b> (синя) — мощността, която отива за преодоляване на",
+      "съпротивлението: P = D · V.</li>",
+      "<li><b>Налична</b> (жълта) — полезната мощност, която моторът и",
+      "витлото дават като тяга при тази скорост (след КПД на витлото).</li></ul>",
+      "<h4>Оси</h4><ul>",
+      "<li><b>X — скорост V, m/s</b> (1 m/s = 3.6 km/h).</li>",
+      "<li><b>Y — мощност P, W</b> (ватове).</li></ul>",
+      "<h4>Защо нужната мощност е „корито“</h4>",
+      "<p>При ниска скорост доминира индуктивното съпротивление (крилото",
+      "„виси“ с голям ъгъл на атака), при висока — паразитното, което расте",
+      "с V². Дъното на коритото е скоростта за <b>най-дълъг полет</b>.</p>",
+      "<h4>Числата за този дизайн</h4><ul>",
+      "<li><b>Минимална нужна мощност</b> " + n(f.pReqMin, 1) + " W при " +
+        n(f.vMinPower, 1) + " m/s" + kmh(f.vMinPower) +
+        " — най-дълго време във въздуха.</li>",
+      "<li><b>Крейсер</b> " + n(a.v_cruise_ms, 1) + " m/s: нужни " +
+        n(f.pReqCruise, 1) + " W, налични " + n(f.pAvailCruise, 1) + " W.</li>",
+      "<li><b>Излишна мощност</b> " + n(f.pExcess, 1) + " W → скорост на " +
+        "изкачване ~" + n(f.climb, 1) + " m/s (излишна мощност / тегло).</li>",
+      "<li><b>V_max</b> " + n(f.vMax, 1) + " m/s" + kmh(f.vMax) +
+        " — там кривите се пресичат; по-бързо в хоризонтален полет моделът не може.</li></ul>",
+      "<h4>Как да го четеш</h4><ul>",
+      "<li>Голямо разстояние между кривите при крейсер = бързо изкачване и запас.</li>",
+      "<li>Ако кривите се допират близо до крейсера, моторът или витлото са слаби.</li>",
+      "<li>V_max е основата и за оразмеряване на сервата (проектна скорост ×1.25 при пикиране).</li></ul>",
+    ].join("\n");
+  },
+
+  /** Списък с APC витла за панела „Витло“. */
+  async loadPropellers() {
+    const sel = this.$("propSelect");
+    if (!sel) return;
+    const res = await API.propellerList();
+    sel.innerHTML = "";
+    if (!res.ok) {
+      this.$("propResult").textContent = res.error;
+      return;
+    }
+    res.items.forEach((item) => {
+      const opt = this.el("option", null, item.label);
+      opt.value = item.name;
+      sel.appendChild(opt);
+    });
+  },
+
+  /** Оценка за печат и проверки на избраното витло. */
+  async checkPropeller() {
+    const name = this.$("propSelect").value;
+    const box = this.$("propResult");
+    box.innerHTML = "";
+    if (!name) return;
+    const bed = [this._num("bedX") || 220, this._num("bedY") || 220,
+                 this._num("bedZ") || 250];
+    const res = await API.propellerSummary(
+      name, this._num("propRpm") || 8000, this.$("propMaterial").value,
+      (this._num("propInfill") || 100) / 100, bed);
+    if (!res.ok) {
+      box.textContent = res.error;
+      return;
+    }
+    const s = res.summary;
+    const e = s.estimate;
+    const rows = [
+      ["Диаметър", `${fmt(s.diameter_in, 1)} in`],
+      ["Брой перки", String(s.blades)],
+      ["Обем (перки, без хъб)", `${fmt(e.volume_cm3, 1)} cm³`],
+      ["Маса за печат", `${fmt0(e.mass_g)} g`],
+      ["Материал на печат", `${this.$("propMaterial").value.toUpperCase()}, запълване ${fmt0(e.infill * 100)} %`],
+    ];
+    if (s.bed) {
+      rows.push(["Дължина на едно витло", `${fmt0(s.bed.length_mm)} mm — ` +
+        (s.bed.fits ? "се побира на леглото" : "не се побира на леглото")]);
+    }
+    const table = this.el("table", "kv");
+    this.fillKv(table, rows);
+    box.appendChild(table);
+    const icons = { ok: "✅", warn: "⚠️", error: "❌", info: "ℹ️" };
+    this.sortChecks(s.checks).forEach((c) => {
+      const row = this.el("div", "check " + c.level);
+      row.appendChild(this.el("div", "icon", icons[c.level] || "•"));
+      const body = this.el("div");
+      body.appendChild(this.el("div", "t", c.title));
+      body.appendChild(this.el("div", "d", c.detail));
+      row.appendChild(body);
+      box.appendChild(row);
+    });
+  },
+
+  /** Записва STL на избраното витло в exports/propellers/. */
+  async exportPropellerStl() {
+    const info = this.$("propStlInfo");
+    const res = await API.propellerStl(this.$("propSelect").value);
+    info.textContent = res.ok
+      ? `STL: ${res.path} (${res.triangles} триъгълника)`
+      : res.error;
+  },
+
+  /** Грешки първо, после предупреждения, информация и „добре“. */
+  sortChecks(checks) {
+    const rank = { error: 0, warn: 1, info: 2, ok: 3 };
+    return checks.slice().sort((a, b) =>
+      (rank[a.level] ?? 9) - (rank[b.level] ?? 9));
+  },
+
   // ------------------------------------------------------------- рендиране
   fillKv(table, rows) {
     table.innerHTML = "";
@@ -695,13 +1129,13 @@ const UI = {
     if (counts.error > 0) {
       verdict.className = "verdict error";
       verdict.textContent =
-        `❌ ${counts.error} критични проблема — дизайнът не е готов за полет`;
+        `❌ ${counts.error} критични проблема — дизайнът не минава проверките`;
     } else if (counts.warn > 0) {
       verdict.className = "verdict warn";
-      verdict.textContent = `⚠️ Лети, но с ${counts.warn} забележки`;
+      verdict.textContent = `⚠️ Минава проверките с ${counts.warn} забележки`;
     } else {
       verdict.className = "verdict ok";
-      verdict.textContent = "✅ Дизайнът минава всички проверки";
+      verdict.textContent = "✅ Дизайнът минава всички проверки (не е изпробван в полет)";
     }
     this.$("verdictStats").textContent =
       `${res.mission.label} · ${res.checks.length} проверки · ` +
@@ -742,12 +1176,12 @@ const UI = {
       `CL_max ${fmt(g.airfoil.cl_max, 2)} · t/c ` +
       `${fmt(st.thickness_ratio * 100, 0)} %`);
     addCard("Печат", fmt0(pr.total_mass_g) + " g",
-      `${fmt(pr.time_h, 1)} h · ${fmt0(pr.cost)} € · ${pr.pieces} части`);
+      `${fmt(pr.time_h, 1)} h · ${fmt(pr.filament_m, 0)} m · ${pr.pieces} части`);
 
     const checks = this.$("checks");
     checks.innerHTML = "";
     const icons = { ok: "✅", warn: "⚠️", error: "❌", info: "ℹ️" };
-    res.checks.forEach((c) => {
+    this.sortChecks(res.checks).forEach((c) => {
       const box = this.el("div", "check " + c.level);
       box.appendChild(this.el("div", "icon", icons[c.level] || "•"));
       const body = this.el("div");
@@ -804,6 +1238,20 @@ const UI = {
       ["Тяга (статична)",
         `${fmt(p.thrust_avail_n, 1)} N ≈ ${fmt(p.thrust_avail_kg, 2)} kg`],
       ["Витло", `${p.prop_d_in}×${p.prop_pitch_in} инча`],
+      ...(res.motor_view ? [
+        ["Размер на мотора",
+          `${res.motor_view.motor} (камбана Ø${fmt(res.motor_view.can_d_mm, 1)}` +
+          `×${fmt0(res.motor_view.can_l_mm)} mm, вал Ø${res.motor_view.shaft_d_mm}` +
+          ` mm, ~${fmt0(res.motor_view.mass_g)} g, до ` +
+          `${fmt0(res.motor_view.p_max_w)} W)`],
+        ["Монтаж", `кръст ${res.motor_view.mount_mm.join("/")} mm, 4×M3` +
+          (res.motor_view.x_firewall_mm
+            ? `, преграда ${fmt0(res.motor_view.x_firewall_mm)} mm от носа` : "")],
+        ...(res.motor_view.below_belly_mm > 0 ? [[
+          "Витлото под корема",
+          `${fmt0(res.motor_view.below_belly_mm)} mm ⚠️ — колесник, ръчно ` +
+          "хвърляне или сгъваемо витло"]] : []),
+      ] : []),
       ["Обороти", `${fmt0(p.rpm_target)} об/мин (J ${fmt(p.advance_ratio_cruise, 2)}, лимит ${fmt0(p.rpm_tip)})`],
       ["Kv на мотора", fmt0(p.kv)],
       ["Максимален ток",
@@ -878,14 +1326,28 @@ const UI = {
     const partRows = pr.parts.map((part) => [
       part.name, part.pieces, fmt(part.volume_cm3, 1),
       fmt0(part.mass_g), fmt(part.filament_m, 1),
-      fmt(part.time_h, 1), fmt(part.cost, 2),
+      fmt(part.time_h, 1),
     ]);
     this.fillData(this.$("printTable"),
-      ["Част", "Бр.", "Обем cm³", "Маса g", "Филамент m", "Време h",
-       "Цена €"],
+      ["Част", "Бр.", "Обем cm³", "Маса g", "Филамент m", "Време h"],
       partRows,
       ["Общо", pr.pieces, "", fmt0(pr.total_mass_g),
-       fmt(pr.filament_m, 1), fmt(pr.time_h, 1), fmt(pr.cost, 2)]);
+       fmt(pr.filament_m, 1), fmt(pr.time_h, 1)]);
+
+    const matName = (k) => MATERIAL_LABELS[k] || k;
+    const mats = res.material_comparison || [];
+    const matRows = mats.map((r) => [
+      matName(r.spar), matName(r.joiner), fmt0(r.spar_g), fmt0(r.joiner_g),
+      fmt0(r.mass_g), r.ok ? "да" : "не",
+    ]);
+    this.fillData(this.$("materialTable"),
+      ["Спар", "Джойнер", "Спар g", "Джойнер g", "Общо g", "Годен"],
+      matRows, null);
+
+    Charts.sparSection(this.$("sparCanvas"), res.structure_view);
+    Charts.sparPlan(this.$("sparPlanCanvas"), res.structure_view);
+    this.renderSparInfo(res.structure_view, st);
+    this.markTabs(res.checks || []);
 
     const massRows = w.components.map((c) => [
       c.name + (c.estimated ? " (оценка)" : ""),
@@ -899,32 +1361,45 @@ const UI = {
       ["Конструкция (печат)", "—", "—", "—", fmt0(w.airframe_g), "—"]);
 
     const filRows = w.filament_comparison.map((f) => [
-      f.name, fmt0(f.mass_g), fmt(f.cost, 0),
+      f.name, fmt0(f.mass_g),
     ]);
     this.fillData(this.$("filamentTable"),
-      ["Филамент", "Маса g", "Цена €"], filRows);
+      ["Филамент", "Маса g"], filRows);
 
     const curves = res.curves || {};
+    const facts = this.chartFacts(res);
     const ldPoints = (curves.v || []).map((v, i) => [v, curves.ld[i]]);
+    const ldMarkers = [
+      { x: a.v_stall_ms, label: "V_stall" },
+      { x: a.v_cruise_ms, label: "крейсер", color: Charts.COLORS.line3 },
+    ];
+    if (facts.vBestLd) {
+      ldMarkers.push({ x: facts.vBestLd, label: "макс. L/D", color: "#b48cff" });
+    }
     Charts.line(this.$("chartLD"),
       [{ name: "L/D", color: Charts.COLORS.line1, points: ldPoints }],
       {
-        markers: [
-          { x: a.v_stall_ms, label: "V_stall" },
-          { x: a.v_cruise_ms, label: "крейсер", color: Charts.COLORS.line3 },
-        ],
+        markers: ldMarkers,
+        xLabel: "Скорост V, m/s",
+        yLabel: "Качество L/D (подемна / челна сила)",
       });
 
     const reqPoints = (curves.v || []).map((v, i) => [v, curves.p_req[i]]);
     const availPoints = (curves.v || []).map((v, i) => [v, curves.p_avail[i]]);
+    const pMarkers = [
+      { x: a.v_stall_ms, label: "V_stall" },
+      { x: a.v_cruise_ms, label: "крейсер", color: Charts.COLORS.line3 },
+    ];
+    if (facts.vMax) {
+      pMarkers.push({ x: facts.vMax, label: "V_max", color: "#ff9a3c" });
+    }
     Charts.line(this.$("chartPower"), [
       { name: "нужна", color: Charts.COLORS.line1, points: reqPoints },
       { name: "налична", color: Charts.COLORS.line2, points: availPoints },
     ], {
-      markers: [
-        { x: a.v_stall_ms, label: "V_stall" },
-        { x: a.v_cruise_ms, label: "крейсер", color: Charts.COLORS.line3 },
-      ],
+      markers: pMarkers,
+      xLabel: "Скорост V, m/s",
+      yLabel: "Мощност P, W",
     });
 
     this.syncAutoHints(res);

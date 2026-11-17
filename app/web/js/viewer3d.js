@@ -29,9 +29,21 @@ const Viewer = {
   w: 900,
   h: 460,
   dragging: false,
+  dragMode: "rotate",      // "rotate" | "pan"
   lastX: 0,
   lastY: 0,
+  // Камера: въртенето е около `pivot` — точката в центъра на изгледа.
+  // В началния изглед pivot = центърът на модела и рамката се пасва
+  // автоматично; след местене/приближаване (custom) мащабът и pivot-ът
+  // остават, каквито ги е оставил потребителят.
+  pivot: null,
+  custom: false,
+  ZOOM_MIN: 0.2,
+  ZOOM_MAX: 40,
   useGL: false,
+  // „Вътрешност“: обшивката е полупрозрачна, спарът и джойнерът се виждат
+  xray: false,
+  XRAY_ALPHA: 0.24,
   program: null,
   buffers: [],
   _mesh: null,
@@ -40,6 +52,8 @@ const Viewer = {
   init() {
     this.canvas = document.getElementById("model3d");
     if (!this.canvas) return;
+    try { this.xray = localStorage.getItem("aeroforge.xray") === "1"; }
+    catch (err) { this.xray = false; }
     this.overlay = document.getElementById("model3dOverlay");
     if (this.overlay) {
       this.overlayCtx = this.overlay.getContext("2d");
@@ -96,6 +110,11 @@ const Viewer = {
     this._windowBound = true;
 
     window.addEventListener("mouseup", () => {
+      if (this.dragging && this.dragMode === "pan") {
+        // след местене въртенето е около частта в центъра на изгледа
+        this._snapPivotDepth();
+        this.render();
+      }
       this.dragging = false;
       if (this.canvas) this.canvas.style.cursor = "grab";
     });
@@ -105,6 +124,10 @@ const Viewer = {
       const dy = event.clientY - this.lastY;
       this.lastX = event.clientX;
       this.lastY = event.clientY;
+      if (this.dragMode === "pan") {
+        this.panBy(dx, dy);
+        return;
+      }
       this.yaw -= dx * 0.008;
       this.pitch = Math.max(-1.35, Math.min(1.35, this.pitch + dy * 0.006));
       this.render();
@@ -119,16 +142,22 @@ const Viewer = {
     if (!canvas) return;
 
     canvas.addEventListener("mousedown", (event) => {
+      // десен/среден бутон или Shift + ляв → местене (pan); ляв → въртене
+      const pan = event.button === 1 || event.button === 2 || event.shiftKey;
+      if (event.button === 1) event.preventDefault();   // без автоскрол
       this.dragging = true;
+      this.dragMode = pan ? "pan" : "rotate";
       this.lastX = event.clientX;
       this.lastY = event.clientY;
-      canvas.style.cursor = "grabbing";
+      canvas.style.cursor = pan ? "move" : "grabbing";
     });
+    canvas.addEventListener("contextmenu", (event) => event.preventDefault());
     canvas.addEventListener("wheel", (event) => {
       event.preventDefault();
-      const factor = Math.exp(-event.deltaY * 0.0012);
-      this.zoom = Math.max(0.35, Math.min(3.5, this.zoom * factor));
-      this.render();
+      const rect = canvas.getBoundingClientRect
+        ? canvas.getBoundingClientRect() : { left: 0, top: 0 };
+      this.zoomAt(Math.exp(-event.deltaY * 0.0012),
+                  event.clientX - rect.left, event.clientY - rect.top);
     }, { passive: false });
     canvas.addEventListener("dblclick", () => this.setView("iso"));
     canvas.style.cursor = "grab";
@@ -150,6 +179,10 @@ const Viewer = {
     info.textContent =
       `размах ${Math.round(model.size.span_mm)} mm · ` +
       `дължина ${Math.round(model.size.length_mm)} mm · ` +
+      `опашка ${model.info && model.info.tail_airfoil || "—"}` +
+      (model.info && model.info.fin_airfoil
+        && model.info.fin_airfoil !== model.info.tail_airfoil
+        ? ` / кил ${model.info.fin_airfoil}` : "") + " · " +
       `${model.triangles} триъгълника` +
       (model.quality ? ` · качество ${model.quality}` : "") +
       ` · ${this.rendererName()}`;
@@ -179,6 +212,19 @@ const Viewer = {
     });
     this.center = [(minX + maxX) / 2, (minY + maxY) / 2, (minZ + maxZ) / 2];
     this.size = [maxX - minX, maxY - minY, maxZ - minZ];
+    // при преизчисление (нов модел) свободната камера остава, където е
+    if (!this.custom || !this.pivot) {
+      this.pivot = this.center.slice();
+      this.custom = false;
+    }
+  },
+
+  /** Включва/изключва полупрозрачната обшивка (виж слоевете на частите). */
+  setXray(on) {
+    this.xray = !!on;
+    try { localStorage.setItem("aeroforge.xray", this.xray ? "1" : "0"); }
+    catch (err) { /* без localStorage — само за сесията */ }
+    this.render();
   },
 
   setView(name) {
@@ -191,26 +237,133 @@ const Viewer = {
     const view = views[name] || views.iso;
     this.yaw = view[0];
     this.pitch = view[1];
-    this.zoom = 1;
+    this.resetCamera();
     this.render();
+  },
+
+  /** Началната камера: pivot = центърът на модела, рамката се пасва сама. */
+  resetCamera() {
+    this.pivot = (this.center || [0, 0, 0]).slice();
+    this.custom = false;
+    this.zoom = 1;
+  },
+
+  /** Посоките на екрана в света: надясно, нагоре (за местене и приближаване). */
+  _screenAxes() {
+    const cy = Math.cos(this.yaw);
+    const sy = Math.sin(this.yaw);
+    const cp = Math.cos(this.pitch);
+    const sp = Math.sin(this.pitch);
+    return { right: [cy, -sy, 0], up: [sy * sp, cy * sp, cp] };
+  },
+
+  /**
+   * Преминава от автоматична рамка към свободна камера: точката, която е
+   * в центъра на екрана, става pivot, а мащабът се запазва — нищо не
+   * подскача.
+   */
+  _enterCustom() {
+    if (this.custom) return;
+    if (!this.pivot) this.pivot = (this.center || [0, 0, 0]).slice();
+    const off = this.fitOffset || [0, 0, 0];
+    const { right, up } = this._screenAxes();
+    for (let k = 0; k < 3; k++) {
+      this.pivot[k] += right[k] * off[0] + up[k] * off[1];
+    }
+    this.fitOffset = [0, 0, off[2]];
+    this.custom = true;
+  },
+
+  /**
+   * Слага точката на въртене върху частта в центъра на екрана: най-
+   * близкият до камерата връх около лъча през центъра. Без това pivot-ът
+   * остава на дълбочината на центъра на модела (във въздуха пред/зад
+   * гледаната част) и при завъртане тя „отлита“ встрани.
+   */
+  _snapPivotDepth() {
+    if (!this.model || !this.pivot) return;
+    const mesh = this.meshData();
+    if (!mesh || !mesh.vlist.length) return;
+    const s = this.scale * this.zoom || 1;
+    const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw);
+    const cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    const depthAxis = [sy * cp, cy * cp, -sp];
+    for (const px of [24, 72, 200]) {
+      const r = px / s;
+      let best = null;
+      for (const v of mesh.vlist) {
+        const [X, up, depth] = this._viewPoint(v[0], v[1], v[2]);
+        if (Math.abs(X) <= r && Math.abs(up) <= r
+            && (best === null || depth < best)) {
+          best = depth;          // по-малка дълбочина = по-близо до камерата
+        }
+      }
+      if (best !== null) {
+        for (let k = 0; k < 3; k++) this.pivot[k] += depthAxis[k] * best;
+        return;
+      }
+    }
+  },
+
+  /** Местене (pan) с dx, dy пиксела: моделът следва мишката. */
+  panBy(dx, dy) {
+    if (!this.model) return;
+    this._enterCustom();
+    const s = this.scale * this.zoom || 1;
+    const { right, up } = this._screenAxes();
+    for (let k = 0; k < 3; k++) {
+      this.pivot[k] += (-right[k] * dx + up[k] * dy) / s;
+    }
+    this.render();
+  },
+
+  /**
+   * Приближаване с `factor` към точката (mx, my) в пиксели от горния ляв
+   * ъгъл: точката под курсора остава на мястото си.
+   */
+  zoomAt(factor, mx, my) {
+    if (!this.model) return;
+    this._enterCustom();
+    const s0 = this.scale * this.zoom || 1;
+    const zoom = Math.max(this.ZOOM_MIN, Math.min(this.ZOOM_MAX, this.zoom * factor));
+    const s1 = this.scale * zoom || 1;
+    const ox = (Number.isFinite(mx) ? mx : this.w / 2) - this.w / 2;
+    const oy = (Number.isFinite(my) ? my : this.h / 2) - this.h / 2;
+    const { right, up } = this._screenAxes();
+    for (let k = 0; k < 3; k++) {
+      // точката под курсора: pivot + right·ox/s − up·oy/s (при s0 и при s1)
+      const target = this.pivot[k] + right[k] * ox / s0 - up[k] * oy / s0;
+      this.pivot[k] = target - right[k] * ox / s1 + up[k] * oy / s1;
+    }
+    this.zoom = zoom;
+    this._snapPivotDepth();
+    this.render();
+  },
+
+  /**
+   * Размер на сцената в CSS px: следва обвивката .viewer-canvas (CSS задава
+   * ширина 100 % и височина спрямо прозореца). Без layout (скрит елемент,
+   * тестове) се връща резервният размер 900×460.
+   */
+  viewSize() {
+    const box = this.canvas && this.canvas.parentNode;
+    const w = box ? Math.floor(box.clientWidth || 0) : 0;
+    const h = box ? Math.floor(box.clientHeight || 0) : 0;
+    if (w >= 120 && h >= 80) return [w, h];
+    return [900, 460];
   },
 
   prepare() {
     const dpr = window.devicePixelRatio || 1;
-    const w = 900;
-    const h = 460;
-    const setup = (canvas, overlay) => {
+    const [w, h] = this.viewSize();
+    const key = `${dpr}:${w}x${h}`;
+    const setup = (canvas) => {
       if (!canvas) return null;
-      if (canvas.dataset.dpr !== String(dpr)) {
-        if (!overlay) {
-          // overlay-ът се разтяга от CSS (inset: 0), не от inline стил
-          canvas.style.width = "100%";
-          canvas.style.maxWidth = w + "px";
-          canvas.style.height = "auto";
-        }
+      if (canvas.dataset.dpr !== key) {
+        // и двата канваса се разтягат от CSS (100 % / inset: 0)
         canvas.width = Math.floor(w * dpr);
         canvas.height = Math.floor(h * dpr);
-        canvas.dataset.dpr = String(dpr);
+        canvas.dataset.dpr = key;
       }
       return canvas;
     };
@@ -221,10 +374,11 @@ const Viewer = {
   },
 
   _viewPoint(x, y, z) {
-    // само завъртане: [екран X, екран Y (нагоре), дълбочина]
-    const cx = x - this.center[0];
-    const cy = y - this.center[1];
-    const cz = z - this.center[2];
+    // само завъртане около pivot: [екран X, екран Y (нагоре), дълбочина]
+    const c = this.pivot || this.center;
+    const cx = x - c[0];
+    const cy = y - c[1];
+    const cz = z - c[2];
 
     const cyaw = Math.cos(this.yaw);
     const syaw = Math.sin(this.yaw);
@@ -273,6 +427,13 @@ const Viewer = {
         if (depth > maxD) maxD = depth;
       }
     });
+    if (this.custom) {
+      // свободна камера: мащабът и центърът са на потребителя, тук само
+      // дълбочината (иначе WebGL изрязва модела)
+      this.fitOffset = [0, 0, (minD + maxD) / 2];
+      this.depthSpan = Math.max(1e-6, (maxD - minD) / 2 * 1.02);
+      return;
+    }
     const width = Math.max(1e-6, maxX - minX);
     const height = Math.max(1e-6, maxY - minY);
     // центърът на екранната рамка не е задължително центърът на модела
@@ -349,13 +510,14 @@ const Viewer = {
       "varying vec3 vNormal;",
       "varying vec3 vColor;",
       "uniform vec3 uLight;",
+      "uniform float uAlpha;",
       "void main() {",
       "  vec3 n = normalize(vNormal);",
       "  // двустранно: abs() → осветено и когато нормалата сочи обратно",
       "  float diff = abs(dot(n, uLight));",
       "  float spec = pow(diff, 14.0) * 0.16;",
       "  vec3 col = vColor * (0.34 + 0.60 * diff) + vec3(spec);",
-      "  gl_FragColor = vec4(min(col, vec3(1.0)), 1.0);",
+      "  gl_FragColor = vec4(min(col, vec3(1.0)), uAlpha);",
       "}",
     ].join("\n");
 
@@ -441,9 +603,10 @@ const Viewer = {
     const r20 = sy * cp, r21 = cy * cp, r22 = -sp;
     const off = this.fitOffset || [0, 0, 0];
     // центърът на модела (отместването се вади след завъртането)
-    const cx = this.center[0];
-    const cyy = this.center[1];
-    const cz = this.center[2];
+    const pv = this.pivot || this.center;
+    const cx = pv[0];
+    const cyy = pv[1];
+    const cz = pv[2];
     let tx = -(r00 * cx + r01 * cyy + r02 * cz);
     let ty = -(r10 * cx + r11 * cyy + r12 * cz);
     let tz = -(r20 * cx + r21 * cyy + r22 * cz);
@@ -499,7 +662,29 @@ const Viewer = {
     bind("aColor", this.bufColor, 3);
 
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.bufIndex);
-    gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
+    const alpha = gl.getUniformLocation(program, "uAlpha");
+    const mesh = this._mesh || {};
+    const skin = mesh.skinCount || 0;
+    if (!this.xray || !skin) {
+      gl.uniform1f(alpha, 1.0);
+      gl.drawElements(gl.TRIANGLES, this.indexCount, this.indexType, 0);
+      return;
+    }
+    // първо плътните части (спар, джойнер, опашка…), после обшивката —
+    // полупрозрачна и без запис в z-buffer-а, за да не скрива вътрешността
+    const solid = this.indexCount - skin;
+    const bytes = this.indexType === gl.UNSIGNED_INT ? 4 : 2;
+    gl.uniform1f(alpha, 1.0);
+    if (solid > 0) {
+      gl.drawElements(gl.TRIANGLES, solid, this.indexType, 0);
+    }
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    gl.uniform1f(alpha, this.XRAY_ALPHA);
+    gl.drawElements(gl.TRIANGLES, skin, this.indexType, solid * bytes);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
   },
 
   // ------------------------------------------------------- обща геометрия
@@ -514,8 +699,11 @@ const Viewer = {
     const vcolor = [];
     const tris = [];
 
+    // заваряване на върховете само в рамките на една част: иначе цветът
+    // и нормалите на обшивката и вътрешните части се смесват
+    let partKey = "";
     const addVert = (x, y, z, color) => {
-      const key = x + "," + y + "," + z;
+      const key = partKey + x + "," + y + "," + z;
       let idx = map.get(key);
       if (idx === undefined) {
         idx = vlist.length;
@@ -526,9 +714,11 @@ const Viewer = {
       return idx;
     };
 
-    this.model.parts.forEach((part) => {
+    this.model.parts.forEach((part, partIndex) => {
       const p = part.points;
       const color = this.parseColor(part.color);
+      const layer = part.layer || "solid";
+      partKey = partIndex + ":";
       const partTris = [];
       for (let i = 0; i < p.length; i += 9) {
         const ax = p[i], ay = p[i + 1], az = p[i + 2];
@@ -547,6 +737,7 @@ const Viewer = {
               addVert(cx, cy, cz, color)],
           n: [nx, ny, nz],
           color,
+          skin: layer === "skin",
         });
       }
       // предпазна мярка: ако частта е с обърната намотка, обръщаме я
@@ -583,11 +774,19 @@ const Viewer = {
       const l = Math.hypot(a[0], a[1], a[2]) || 1;
       return [a[0] / l, a[1] / l, a[2] / l];
     });
+    // индексите: първо плътните триъгълници, после обшивката (за X-ray)
     const indices = [];
+    let skinCount = 0;
     tris.forEach((t) => {
-      indices.push(t.i[0], t.i[1], t.i[2]);
+      if (!t.skin) indices.push(t.i[0], t.i[1], t.i[2]);
     });
-    this._mesh = { vlist, vnorm, vcolor, tris, indices };
+    tris.forEach((t) => {
+      if (t.skin) {
+        indices.push(t.i[0], t.i[1], t.i[2]);
+        skinCount += 3;
+      }
+    });
+    this._mesh = { vlist, vnorm, vcolor, tris, indices, skinCount };
     this._meshFor = this.model;
     return this._mesh;
   },
@@ -625,6 +824,7 @@ const Viewer = {
       const dot = Math.abs(nx * light[0] + ny * light[1] + nz * light[2]);
       faces.push({
         a, b, c,
+        alpha: (this.xray && t.skin) ? this.XRAY_ALPHA : 1,
         depth: (a[2] + b[2] + c[2]) / 3,
         color: t.color,
         shade: 0.30 + 0.62 * dot + 0.14 * Math.pow(dot, 8),
@@ -639,6 +839,7 @@ const Viewer = {
         Math.min(255, Math.round(t.color[1] * t.shade)) + "," +
         Math.min(255, Math.round(t.color[2] * t.shade)) + ")";
       ctx.fillStyle = col;
+      ctx.globalAlpha = t.alpha;
       ctx.beginPath();
       ctx.moveTo(t.a[0], t.a[1]);
       ctx.lineTo(t.b[0], t.b[1]);
@@ -646,6 +847,7 @@ const Viewer = {
       ctx.closePath();
       ctx.fill();
     });
+    ctx.globalAlpha = 1;
   },
 
 

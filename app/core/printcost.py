@@ -110,53 +110,49 @@ def ellipse_perimeter(a, b):
     return math.pi * (3.0 * (a + b) - math.sqrt((3.0 * a + b) * (a + 3.0 * b)))
 
 
+def split_plan(geom, tail, cfg):
+    """
+    Колко части трябва да се печатат, за да влезе всичко в леглото.
+
+    Крилото се реже по размаха (Z) и по хорда (XY) със съединяване с джойнер;
+    опашката — по хорда и по височина. Разрезите са стандартна практика
+    и се отразяват в броя части, времето и цената.
+    """
+    bed = cfg.get("bed") or DEFAULT_BED
+    bed_xy = min(float(bed[0]), float(bed[1]))
+    bed_z = max(1.0, float(bed[2]))
+    c_root = float(geom.get("c_root_mm", 0.0))
+    semispan = float(geom.get("span_mm", 0.0)) / 2.0
+    tail_chord = max(float(tail.get("c_h_mm", 0.0) or 0.0),
+                     float(tail.get("c_v_mm", 0.0) or 0.0))
+    tail_height = semispan * 0.35
+    return {
+        "wing_span_pieces": max(1, int(math.ceil(semispan / bed_z))),
+        "wing_chord_pieces": max(1, int(math.ceil(c_root / bed_xy - 1e-9))),
+        "tail_chord_pieces": (max(1, int(math.ceil(tail_chord / bed_xy - 1e-9)))
+                              if tail_chord > 0 else 1),
+        "tail_height_pieces": max(1, int(math.ceil(tail_height / bed_z - 1e-9))),
+    }
+
+
 def fit_problems(geom, tail, fuselage, cfg):
     """
     Проверява дали частите физически влизат в леглото.
 
     Връща списък от текстови проблеми; празен списък = всичко се побира.
-    Това е отделно от оценката за маса/време, за да не се показва валиден
-    печат за детайл, който не може да се сложи на леглото.
+    Хорда и височина над леглото НЕ са проблем — те се решават с разрез
+    (виж split_plan). Остава само сечението на фюзелажа, което не може да
+    се разреже по напречно сечение без нов дизайн.
     """
     bed = cfg.get("bed") or DEFAULT_BED
     bed_xy = min(float(bed[0]), float(bed[1]))
-    bed_z = max(1.0, float(bed[2]))
     problems = []
-
-    c_root = float(geom.get("c_root_mm", 0.0))
-    c_tip = float(geom.get("c_tip_mm", 0.0))
-    if c_root > bed_xy + 1e-6:
-        problems.append("Кореновият хорд %.0f mm е по-голям от леглото "
-                        "%.0f×%.0f mm — завърти крилото или го раздели по "
-                        "хорда." % (c_root, bed[0], bed[1]))
-    if c_tip > bed_xy + 1e-6:
-        problems.append("Върховият хорд %.0f mm е по-голям от леглото "
-                        "%.0f mm." % (c_tip, bed_xy))
-
-    semispan = float(geom.get("span_mm", 0.0)) / 2.0
-    if semispan > 0:
-        half_pieces = max(1, int(math.ceil(semispan / bed_z)))
-        seg = semispan / half_pieces
-        if seg > bed_z + 1e-6:
-            problems.append("Сегментът на крилото %.0f mm е по-висок от "
-                            "Z=%.0f mm." % (seg, bed_z))
 
     w = float(fuselage.get("width_mm", 0.0))
     h = float(fuselage.get("height_mm", 0.0))
     if w > bed_xy + 1e-6 or h > bed_xy + 1e-6:
         problems.append("Сечението на фюзелажа %.0f×%.0f mm не влиза в "
                         "леглото %.0f×%.0f mm." % (w, h, bed[0], bed[1]))
-
-    c_h = float(tail.get("c_h_mm", 0.0) or 0.0)
-    c_v = float(tail.get("c_v_mm", 0.0) or 0.0)
-    if max(c_h, c_v) > bed_xy + 1e-6:
-        problems.append("Хордът на опашката %.0f mm е по-голям от леглото "
-                        "%.0f mm." % (max(c_h, c_v), bed_xy))
-    tail_height = semispan * 0.35
-    if tail_height > bed_z + 1e-6:
-        problems.append("Височината на опашковата част %.0f mm е над Z=%.0f "
-                        "mm — раздели я на повече части." % (tail_height,
-                                                             bed_z))
     return problems
 
 
@@ -174,8 +170,9 @@ def estimate_airframe(geom, tail, fuselage, cfg, filament):
     bed_xy = min(float(bed[0]), float(bed[1]))
     bed_z = max(1.0, float(bed[2]))
     semispan = geom["span_mm"] / 2.0
-    wing_pieces = max(1, int(math.ceil(semispan / bed_z))) * 2
-    wing_seg_len = semispan / max(1, wing_pieces // 2)
+    split = split_plan(geom, tail, cfg)
+    wing_pieces = split["wing_span_pieces"] * 2 * split["wing_chord_pieces"]
+    wing_seg_len = semispan / max(1, split["wing_span_pieces"])
 
     wing_area = geom["area_m2"] * 1e6 * SKIN_EXTRA_FACTOR
     wing_area += float(geom.get("winglet_area_m2") or 0.0) * 1e6 * SKIN_EXTRA_FACTOR
@@ -198,8 +195,11 @@ def estimate_airframe(geom, tail, fuselage, cfg, filament):
     parts.append(_make_part("Крило (2 половини)", wing_area, wing_seg_len,
                             wing_pieces, cfg, filament))
     if tail_area > 1.0:
+        tail_pieces = (2 * split["tail_chord_pieces"]
+                       * split["tail_height_pieces"])
         parts.append(_make_part("Опашка (стабилизатор + кил)", tail_area,
-                                semispan * 0.35, 2, cfg, filament))
+                                semispan * 0.35 / split["tail_height_pieces"],
+                                tail_pieces, cfg, filament))
     parts.append(_make_part("Фюзелаж", fus_area, L / fus_pieces,
                             fus_pieces, cfg, filament, frames_extra))
     return parts

@@ -314,6 +314,26 @@ def is_symmetric(key):
     return get(key).get("kind") == "symmetric"
 
 
+def fin_airfoil(tail_key):
+    """
+    Профилът на кила (вертикалната опашка).
+
+    Килът работи в двете посоки (наляво и надясно), затова профилът му
+    трябва да е симетричен спрямо равнината на самолета. Избраният
+    профил на опашката е за хоризонталните повърхности: ако е симетричен,
+    килът ползва него; ако е с камбер/reflex, килът получава симетричния
+    профил от каталога с най-близка относителна дебелина.
+    """
+    key = tail_key if tail_key in AIRFOILS else DEFAULT_TAIL_AIRFOIL
+    if is_symmetric(key):
+        return key
+    t = thickness_of(key)
+    symmetric = [k for k, af in AIRFOILS.items() if af["kind"] == "symmetric"]
+    if not symmetric:
+        return DEFAULT_TAIL_AIRFOIL
+    return min(symmetric, key=lambda k: (abs(thickness_of(k) - t), k))
+
+
 def thickness_of(key, default=0.12):
     """
     Относителна дебелина на профила (t/c).

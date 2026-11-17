@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AeroForge — калкулатор и генератор на RC самолет</title>
-<link rel="stylesheet" href="style.css?v=072">
+<link rel="stylesheet" href="style.css?v=083">
 </head>
 <body>
 <div class="app">
@@ -17,7 +17,7 @@
            title="Име на дизайна" maxlength="50">
     <button class="btn" id="btnExample" title="Зареди примерен дизайн">✨ Пример</button>
     <button class="btn" id="btnSettings"
-            title="Настройки: филаменти, цени, базови стойности">⚙ Настройки</button>
+            title="Настройки: изглед, филаменти, материали, базови стойности">⚙ Настройки</button>
     <button class="btn" id="btnLoad" title="Заредени дизайни">📂 Дизайни</button>
     <button class="btn" id="btnSave" title="Запази дизайна">💾 Запази</button>
     <button class="btn btn-accent" id="btnExport"
@@ -28,380 +28,593 @@
 
     <section class="side">
       <nav class="tabs">
-        <button class="tab-btn active" data-tab="payload">Товар</button>
-        <button class="tab-btn" data-tab="mission">Мисия</button>
-        <button class="tab-btn" data-tab="wing">Крило</button>
-        <button class="tab-btn" data-tab="fuselage">Тяло</button>
-        <button class="tab-btn" data-tab="tail">Опашка</button>
-        <button class="tab-btn" data-tab="power">Мотор</button>
-        <button class="tab-btn" data-tab="print">Печат</button>
+        <button class="tab-btn active" data-tab="payload"><i>📦</i>Товар</button>
+        <button class="tab-btn" data-tab="mission"><i>🎯</i>Мисия</button>
+        <button class="tab-btn" data-tab="wing"><i>✈</i>Крило</button>
+        <button class="tab-btn" data-tab="fuselage"><i>🛩</i>Тяло</button>
+        <button class="tab-btn" data-tab="tail"><i>🪶</i>Опашка</button>
+        <button class="tab-btn" data-tab="power"><i>⚡</i>Мотор</button>
+        <button class="tab-btn" data-tab="prop"><i>🌀</i>Витло</button>
+        <button class="tab-btn" data-tab="print"><i>🖨</i>Печат</button>
+        <button class="tab-btn" data-tab="structure"><i>🔧</i>Конструкция</button>
       </nav>
 
       <div class="panes">
 
         <div class="pane active" id="pane-payload">
-          <div class="field">
-            <label>Как ще зададеш товара?</label>
-            <div class="radio-row">
-              <label class="radio">
-                <input type="radio" name="payloadMode" value="simple" checked>
-                <span>Само общо тегло</span>
-              </label>
-              <label class="radio">
-                <input type="radio" name="payloadMode" value="components">
-                <span>Списък компоненти</span>
-              </label>
-            </div>
-          </div>
-
-          <div id="simpleBox">
+          <div class="group">
+            <div class="group-title">Товар</div>
             <div class="field">
-              <label for="payloadTotal">Товар без конструкцията (g)</label>
-              <input type="number" id="payloadTotal" step="5" min="0"
-                     value="600">
-              <p class="hint">Мотори, ESC, батерия, серва, камера, кабели…
-                Приложението ще сметне конструкцията и ще провери баланса.</p>
+              <label>Как ще зададеш товара?</label>
+              <div class="radio-row seg">
+                <label class="radio">
+                  <input type="radio" name="payloadMode" value="simple" checked>
+                  <span>Само общо тегло</span>
+                </label>
+                <label class="radio">
+                  <input type="radio" name="payloadMode" value="components">
+                  <span>Списък компоненти</span>
+                </label>
+              </div>
+            </div>
+
+            <div id="simpleBox">
+              <div class="field">
+                <label for="payloadTotal">Товар без конструкцията (g)</label>
+                <input type="number" id="payloadTotal" step="5" min="0"
+                       value="600">
+                <p class="hint">Мотори, ESC, батерия, серва, камера, кабели…
+                  Приложението ще сметне конструкцията и ще провери баланса.</p>
+              </div>
+            </div>
+
+            <div id="componentsBox" class="hidden">
+              <div class="field">
+                <label>Компоненти</label>
+                <div class="component-table-head">
+                  <span>Име</span><span>Кат.</span><span>Бр.</span>
+                  <span>g</span><span>X mm</span><span></span>
+                </div>
+                <div id="componentRows" class="component-rows"></div>
+                <div class="row-actions">
+                  <select id="presetSelect" class="grow">
+                    <option value="">+ от списък…</option>
+                  </select>
+                  <button class="btn btn-sm" id="btnAddComponent">+ Ред</button>
+                </div>
+                <p class="hint">X = позиция от носа (празно = автоматично).
+                  Липсващите категории (мотор, ESC, батерия, серва…) се
+                  оценяват автоматично.</p>
+              </div>
             </div>
           </div>
 
-          <div id="componentsBox" class="hidden">
+          <div class="group">
+            <div class="group-title">Натоварване</div>
             <div class="field">
-              <label>Компоненти</label>
-              <div class="component-table-head">
-                <span>Име</span><span>Кат.</span><span>Бр.</span>
-                <span>g</span><span>X mm</span><span></span>
-              </div>
-              <div id="componentRows" class="component-rows"></div>
-              <div class="row-actions">
-                <select id="presetSelect" class="grow">
-                  <option value="">+ от списък…</option>
-                </select>
-                <button class="btn btn-sm" id="btnAddComponent">+ Ред</button>
-              </div>
-              <p class="hint">X = позиция от носа (празно = автоматично).
-                Липсващите категории (мотор, ESC, батерия, серва…) се
-                оценяват автоматично.</p>
+              <label for="nLimit">Претоварване n (×g)</label>
+              <input type="number" id="nLimit" step="0.5" min="1.5" max="15"
+                     placeholder="авто">
+              <p class="hint">Треньор 4, спорт 6, 3D 8–10.</p>
             </div>
-          </div>
-
-          <div class="field">
-            <label for="nLimit">Максимално натоварване n (g)</label>
-            <input type="number" id="nLimit" step="0.5" min="1.5" max="15"
-                   placeholder="авто">
-            <p class="hint">Треньор 4, спорт 6, 3D 8–10.</p>
           </div>
         </div>
 
         <div class="pane" id="pane-mission">
-          <div class="field">
-            <label for="missionSelect">Тип на модела</label>
-            <select id="missionSelect"></select>
-            <p class="hint" id="missionDesc"></p>
-          </div>
-          <div class="stats-mini" id="missionStats"></div>
-          <div class="field">
-            <label for="safetyFactor">Коефициент на сигурност</label>
-            <input type="number" id="safetyFactor" step="0.1" min="1" max="3"
-                   value="1.5">
+          <div class="group">
+            <div class="group-title">Предназначение</div>
+            <div class="field">
+              <label for="missionSelect">Тип на модела</label>
+              <select id="missionSelect"></select>
+              <p class="hint" id="missionDesc"></p>
+            </div>
+            <div class="stats-mini" id="missionStats"></div>
+            <div class="field">
+              <label for="safetyFactor">Коефициент на сигурност</label>
+              <input type="number" id="safetyFactor" step="0.1" min="1" max="3"
+                     value="1.5">
+            </div>
           </div>
         </div>
 
         <div class="pane" id="pane-wing">
-          <div class="field">
-            <label for="wingLoading">Натоварване на крилото (g/dm²)</label>
-            <input type="number" id="wingLoading" step="1" min="10" max="250"
-                   placeholder="авто">
-            <p class="hint" id="wingLoadingHint"></p>
-          </div>
-          <div class="grid-2">
+          <div class="group">
+            <div class="group-title">Планформа</div>
             <div class="field">
-              <label for="aspectRatio">Разтежение (AR)</label>
-              <input type="number" id="aspectRatio" step="0.1" min="3" max="16"
+              <label for="wingLoading">Натоварване на крилото (g/dm²)</label>
+              <input type="number" id="wingLoading" step="1" min="10" max="250"
                      placeholder="авто">
+              <p class="hint" id="wingLoadingHint"></p>
             </div>
-            <div class="field">
-              <label for="taper">Свиване (c_tip/c_root)</label>
-              <input type="number" id="taper" step="0.05" min="0.25" max="1"
-                     placeholder="авто">
+            <div class="grid-2">
+              <div class="field">
+                <label for="aspectRatio">Разтежение (AR)</label>
+                <input type="number" id="aspectRatio" step="0.1" min="3" max="16"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="taper">Свиване (c_tip/c_root)</label>
+                <input type="number" id="taper" step="0.05" min="0.25" max="1"
+                       placeholder="авто">
+              </div>
             </div>
-          </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="dihedral">Диаедър (°)</label>
-              <input type="number" id="dihedral" step="0.5" placeholder="авто">
-            </div>
-            <div class="field">
-              <label for="wingLeRatio">Крило от носа (% от фюзелажа)</label>
-              <input type="number" id="wingLeRatio" step="1" min="10" max="60"
-                     value="30">
-            </div>
-          </div>
-          <div class="field">
-            <label for="airfoilSelect">Профил</label>
-            <select id="airfoilSelect"></select>
-            <p class="hint" id="airfoilInfo"></p>
-          </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="tipStyle">Тип на върха</label>
-              <select id="tipStyle"></select>
-            </div>
-            <div class="field">
-              <label for="tipFrac">Закръгляне (% от полуразмаха)</label>
-              <input type="number" id="tipFrac" step="1" min="0" max="35"
-                     placeholder="авто">
+            <div class="grid-2">
+              <div class="field">
+                <label for="dihedral">Диаедър (°)</label>
+                <input type="number" id="dihedral" step="0.5" placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="wingLeRatio">Крило от носа (% от фюзелажа)</label>
+                <input type="number" id="wingLeRatio" step="1" min="10" max="60"
+                       placeholder="авто">
+              </div>
             </div>
           </div>
-          <div class="grid-2">
+
+          <div class="group">
+            <div class="group-title">Профил</div>
+            <div class="field">
+              <label for="airfoilSelect">Профил</label>
+              <select id="airfoilSelect"></select>
+              <p class="hint" id="airfoilInfo"></p>
+            </div>
+            <div class="preview">
+              <canvas id="airfoilCanvas" width="330" height="130" data-fluid data-h="170"></canvas>
+            </div>
             <div class="field">
               <label for="washout">Усукване washout (°)</label>
               <input type="number" id="washout" step="0.5" min="0" max="4"
                      placeholder="авто">
             </div>
-            <div class="field">
-              <label for="wingletHeight">Уинглет — височина (mm)</label>
-              <input type="number" id="wingletHeight" step="5" min="0"
-                     max="400" placeholder="0 = без">
-            </div>
           </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="wingletCant">Уинглет — наклон (°)</label>
-              <input type="number" id="wingletCant" step="5" min="45" max="90"
-                     value="85">
+
+          <div class="group">
+            <div class="group-title">Връх и уинглет</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="tipStyle">Тип на върха</label>
+                <select id="tipStyle"></select>
+              </div>
+              <div class="field">
+                <label for="tipFrac">Закръгляне (% от полуразмаха)</label>
+                <input type="number" id="tipFrac" step="1" min="0" max="35"
+                       placeholder="авто">
+              </div>
             </div>
-            <div class="field">
-              <label for="wingletToe">Уинглет — ъгъл (°)</label>
-              <input type="number" id="wingletToe" step="0.5" min="-5" max="5"
-                     value="0">
+            <div class="grid-3">
+              <div class="field">
+                <label for="wingletHeight">Височина (mm)</label>
+                <input type="number" id="wingletHeight" step="5" min="0"
+                       max="400" placeholder="0 = без">
+              </div>
+              <div class="field">
+                <label for="wingletCant">Наклон cant (°)</label>
+                <input type="number" id="wingletCant" step="5" min="45" max="90"
+                       value="85">
+              </div>
+              <div class="field">
+                <label for="wingletToe">Toe-in/out (°)</label>
+                <input type="number" id="wingletToe" step="0.5" min="-5" max="5"
+                       value="0">
+              </div>
             </div>
+            <p class="hint" id="wingletHint"></p>
           </div>
-          <p class="hint" id="wingletHint"></p>
-          <canvas id="airfoilCanvas" width="330" height="130"></canvas>
+
+          <div class="group">
+            <div class="group-title">Елерони</div>
+            <div class="grid-3">
+              <div class="field">
+                <label for="aileronChord">Хорда (% от хордата)</label>
+                <input type="number" id="aileronChord" step="1" min="0" max="40"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="aileronStart">Начало (% от полуразмаха)</label>
+                <input type="number" id="aileronStart" step="1" min="5" max="90"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="aileronEnd">Край (% от полуразмаха)</label>
+                <input type="number" id="aileronEnd" step="1" min="15" max="98"
+                       placeholder="авто">
+              </div>
+            </div>
+            <p class="hint" id="aileronHint"></p>
+            <p class="hint">Хорда 0 = без елерони. При крило без опашка са елевони.
+              Виждат се в 3D и се изрязват в SolidCraft модела като отделни тела.</p>
+          </div>
         </div>
 
         <div class="pane" id="pane-fuselage">
-          <p class="hint" id="fusHint"></p>
-          <div class="grid-2">
-            <div class="field">
-              <label for="fusLength">Дължина (mm)</label>
-              <input type="number" id="fusLength" step="10" min="120"
-                     placeholder="авто">
+          <p class="hint pane-intro" id="fusHint"></p>
+          <div class="group">
+            <div class="group-title">Размери</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="fusLength">Дължина (mm)</label>
+                <input type="number" id="fusLength" step="10" min="120"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="fusLengthRatio">Дължина / размах</label>
+                <input type="number" id="fusLengthRatio" step="0.05" min="0.25"
+                       max="1.6" placeholder="авто">
+              </div>
             </div>
-            <div class="field">
-              <label for="fusLengthRatio">Дължина / размах</label>
-              <input type="number" id="fusLengthRatio" step="0.05" min="0.25"
-                     max="1.6" placeholder="авто">
-            </div>
-          </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="fusWidth">Ширина (mm)</label>
-              <input type="number" id="fusWidth" step="5" min="20"
-                     placeholder="авто">
-            </div>
-            <div class="field">
-              <label for="fusHeight">Височина (mm)</label>
-              <input type="number" id="fusHeight" step="5" min="20"
-                     placeholder="авто">
-            </div>
-          </div>
-          <div class="field">
-            <label for="fusShape">Сечение на тялото</label>
-            <select id="fusShape"></select>
-          </div>
-          <div class="grid-3">
-            <div class="field">
-              <label for="fusNose">Нос (%)</label>
-              <input type="number" id="fusNose" step="1" min="4" max="35"
-                     placeholder="авто">
-            </div>
-            <div class="field">
-              <label for="fusCabin">Кабина (%)</label>
-              <input type="number" id="fusCabin" step="1" min="10" max="90"
-                     placeholder="авто">
-            </div>
-            <div class="field">
-              <label for="fusTaper">Край (%)</label>
-              <input type="number" id="fusTaper" step="1" min="5" max="95"
-                     placeholder="авто">
+            <div class="grid-2">
+              <div class="field">
+                <label for="fusWidth">Ширина (mm)</label>
+                <input type="number" id="fusWidth" step="5" min="20"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="fusHeight">Височина (mm)</label>
+                <input type="number" id="fusHeight" step="5" min="20"
+                       placeholder="авто">
+              </div>
             </div>
           </div>
-          <div class="grid-2">
+
+          <div class="group">
+            <div class="group-title">Форма</div>
+            <div class="preview">
+              <canvas id="fuselageCanvas" width="330" height="150" data-fluid data-h="200"></canvas>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="fusShape">Сечение на тялото</label>
+                <select id="fusShape"></select>
+              </div>
+              <div class="field">
+                <label for="tailBoom">Опашна част</label>
+                <select id="tailBoom"></select>
+              </div>
+            </div>
+            <div class="grid-3">
+              <div class="field">
+                <label for="fusNose">Нос (%)</label>
+                <input type="number" id="fusNose" step="1" min="4" max="35"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="fusCabin">Кабина (%)</label>
+                <input type="number" id="fusCabin" step="1" min="10" max="90"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="fusTaper">Край (%)</label>
+                <input type="number" id="fusTaper" step="1" min="5" max="95"
+                       placeholder="авто">
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="fusHeightRatio">Височина / ширина</label>
+                <input type="number" id="fusHeightRatio" step="0.05" min="0.75"
+                       max="1.8" placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="fusFrames">Шпангоути (ребра)</label>
+                <input type="number" id="fusFrames" step="1" min="0" max="12"
+                       value="0">
+              </div>
+            </div>
+          </div>
+
+          <div class="group">
+            <div class="group-title">Двигатели и крило</div>
             <div class="field">
-              <label for="fusHeightRatio">Височина / ширина</label>
-              <input type="number" id="fusHeightRatio" step="0.05" min="0.75"
-                     max="1.8" placeholder="авто">
+              <label for="propulsionLayout">Двигатели</label>
+              <select id="propulsionLayout"></select>
+              <p class="hint" id="propulsionHint"></p>
             </div>
             <div class="field">
-              <label for="fusFrames">Шпангоути (ребра)</label>
-              <input type="number" id="fusFrames" step="1" min="0" max="12"
-                     value="0">
+              <label for="wingOffset">Височина на крилото: <b id="wingOffsetValue">—</b></label>
+              <div class="offset-row">
+                <input type="range" id="wingOffsetRange" min="-44" max="44" step="1" value="42">
+                <input type="number" id="wingOffset" step="1" placeholder="mm">
+              </div>
+              <div class="offset-presets">
+                <button class="btn btn-sm" data-offset="high">Горно</button>
+                <button class="btn btn-sm" data-offset="mid">Средно</button>
+                <button class="btn btn-sm" data-offset="low">Долно</button>
+              </div>
+              <p class="hint" id="wingOffsetHint"></p>
+            </div>
+            <div class="field">
+              <label for="wingRootGap">Луфт крило → тяло (mm)</label>
+              <input type="number" id="wingRootGap" step="1" min="0" max="40" value="10">
+              <p class="hint">Разстояние от обшивката на фюзелажа до корените на крилата.</p>
             </div>
           </div>
-          <div class="field">
-            <label for="tailBoom">Опашна част</label>
-            <select id="tailBoom"></select>
-          </div>
-          <div class="field">
-            <label for="propulsionLayout">Двигатели</label>
-            <select id="propulsionLayout"></select>
-            <p class="hint" id="propulsionHint"></p>
-          </div>
-          <div class="field">
-            <label for="wingOffset">Височина на крилото: <b id="wingOffsetValue">—</b></label>
-            <div class="offset-row">
-              <input type="range" id="wingOffsetRange" min="-44" max="44" step="1" value="42">
-              <input type="number" id="wingOffset" step="1" placeholder="mm">
-            </div>
-            <div class="offset-presets">
-              <button class="btn btn-sm" data-offset="high">Горно</button>
-              <button class="btn btn-sm" data-offset="mid">Средно</button>
-              <button class="btn btn-sm" data-offset="low">Долно</button>
-            </div>
-            <p class="hint" id="wingOffsetHint"></p>
-          </div>
-          <canvas id="fuselageCanvas" width="330" height="150"></canvas>
         </div>
 
         <div class="pane" id="pane-tail">
-          <div class="field">
-            <label for="tailType">Тип на опашката</label>
-            <select id="tailType"></select>
-            <p class="hint" id="tailTypeHint"></p>
+          <div class="group">
+            <div class="group-title">Конфигурация</div>
+            <div class="field">
+              <label for="tailType">Тип на опашката</label>
+              <select id="tailType"></select>
+              <p class="hint" id="tailTypeHint"></p>
+            </div>
+            <div class="field">
+              <label for="tailPlanform">Планформа на опашката</label>
+              <select id="tailPlanform"></select>
+              <p class="hint" id="tailPlanformHint"></p>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="tailTipStyle">Връх на опашката</label>
+                <select id="tailTipStyle"></select>
+              </div>
+              <div class="field">
+                <label for="vTailDeg">Ъгъл на V-опашката (°)</label>
+                <input type="number" id="vTailDeg" step="1" min="15" max="55"
+                       placeholder="авто">
+              </div>
+            </div>
+            <div class="field">
+              <label for="tailAirfoil">Профил на опашката</label>
+              <select id="tailAirfoil"></select>
+              <p class="hint" id="tailAirfoilHint"></p>
+            </div>
+            <div class="field">
+              <label for="tailRootGap">Луфт опашка → тяло (mm)</label>
+              <input type="number" id="tailRootGap" step="1" min="0" max="40" value="10">
+              <p class="hint">Разстояние от обшивката на фюзелажа до корените на опашката.</p>
+            </div>
           </div>
-          <div class="field">
-            <label for="tailPlanform">Планформа на опашката</label>
-            <select id="tailPlanform"></select>
-            <p class="hint" id="tailPlanformHint"></p>
+
+          <div class="group">
+            <div class="group-title">Кормила</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="elevatorChord" id="elevatorChordLabel">Кормило за височина — хорда (%)</label>
+                <input type="number" id="elevatorChord" step="1" min="0" max="55"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="rudderChord">Кормило за посока — хорда (%)</label>
+                <input type="number" id="rudderChord" step="1" min="0" max="55"
+                       placeholder="авто">
+              </div>
+            </div>
+            <p class="hint" id="tailControlsHint"></p>
+            <p class="hint">Хорда 0 = без кормило. Пантата е като на елероните
+              (жлеб, уши, ос — тел Ø1 mm); сервата са в тялото зад крилото, тягите
+              минават през канали в тялото.</p>
           </div>
-          <div class="field">
-            <label for="tailTipStyle">Връх на опашката</label>
-            <select id="tailTipStyle"></select>
-          </div>
-          <div class="field">
-            <label for="tailAirfoil">Профил на опашката</label>
-            <select id="tailAirfoil"></select>
-            <p class="hint" id="tailAirfoilHint"></p>
-          </div>
-          <div class="field">
-            <label for="vTailDeg">Ъгъл на V-опашката (°)</label>
-            <input type="number" id="vTailDeg" step="1" min="15" max="55"
-                   placeholder="авто">
-          </div>
-          <div class="field">
-            <label for="vh">Хоризонтален обемен коефициент V_h</label>
-            <input type="number" id="vh" step="0.05" min="0" max="1.2"
-                   placeholder="авто">
-            <p class="hint">Нормално 0.35–0.80.</p>
-          </div>
-          <div class="field">
-            <label for="vv">Вертикален обемен коефициент V_v</label>
-            <input type="number" id="vv" step="0.005" min="0" max="0.12"
-                   placeholder="авто">
-            <p class="hint">Нормално 0.015–0.060.</p>
-          </div>
-          <div class="field">
-            <label for="tailArm">Рамо на опашката (част от фюзелажа)</label>
-            <input type="number" id="tailArm" step="0.02" min="0.3" max="0.9"
-                   placeholder="авто">
-          </div>
-          <div class="field">
-            <label for="staticMargin">Статичен запас (% MAC)</label>
-            <input type="number" id="staticMargin" step="1" min="0" max="25"
-                   placeholder="авто">
-            <p class="hint">Треньор 10–15%, спорт 8–10%, 3D 5–8%,
+
+          <div class="group">
+            <div class="group-title">Размер и стабилност</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="vh">Хоризонтален V_h</label>
+                <input type="number" id="vh" step="0.05" min="0" max="1.2"
+                       placeholder="авто">
+                <p class="hint">Нормално 0.35–0.80.</p>
+              </div>
+              <div class="field">
+                <label for="vv">Вертикален V_v</label>
+                <input type="number" id="vv" step="0.005" min="0" max="0.12"
+                       placeholder="авто">
+                <p class="hint">Нормално 0.015–0.060.</p>
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="tailArm">Рамо (част от фюзелажа)</label>
+                <input type="number" id="tailArm" step="0.02" min="0.3" max="0.9"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="staticMargin">Статичен запас (% MAC)</label>
+                <input type="number" id="staticMargin" step="1" min="0" max="25"
+                       placeholder="авто">
+              </div>
+            </div>
+            <p class="hint">Статичен запас: треньор 10–15%, спорт 8–10%, 3D 5–8%,
               крило без опашка 3–7%.</p>
           </div>
         </div>
 
         <div class="pane" id="pane-power">
-          <div class="grid-2">
-            <div class="field">
-              <label for="cells">Батерия (клетки)</label>
-              <input type="number" id="cells" step="1" min="1" max="14"
-                     value="3">
+          <div class="group">
+            <div class="group-title">Батерия</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="cells">Батерия (клетки)</label>
+                <input type="number" id="cells" step="1" min="1" max="14"
+                       value="3">
+              </div>
+              <div class="field">
+                <label for="capacity">Капацитет (mAh)</label>
+                <input type="number" id="capacity" step="50" min="100"
+                       placeholder="авто">
+              </div>
             </div>
             <div class="field">
-              <label for="capacity">Капацитет (mAh)</label>
-              <input type="number" id="capacity" step="50" min="100"
-                     placeholder="авто">
-            </div>
-          </div>
-          <div class="field">
-            <label for="endurance">Желано време на полет (мин)</label>
-            <input type="number" id="endurance" step="1" min="1" max="120"
-                   value="8">
-          </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="tw">Тяга : тегло</label>
-              <input type="number" id="tw" step="0.05" min="0.1" max="3"
-                     placeholder="авто">
-            </div>
-            <div class="field">
-              <label for="pw">Мощност (W/kg)</label>
-              <input type="number" id="pw" step="10" min="30" max="900"
-                     placeholder="авто">
+              <label for="endurance">Желано време на полет (мин)</label>
+              <input type="number" id="endurance" step="1" min="1" max="120"
+                     value="8">
             </div>
           </div>
-          <div class="field">
-            <label for="propSize">Диаметър на витлото (инча)</label>
-            <select id="propSize"></select>
-            <p class="hint">Празно = автоматично (~25% от размаха).</p>
+          <div class="group">
+            <div class="group-title">Тяга и витло</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="tw">Тяга : тегло</label>
+                <input type="number" id="tw" step="0.05" min="0.1" max="3"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="pw">Мощност (W/kg)</label>
+                <input type="number" id="pw" step="10" min="30" max="900"
+                       placeholder="авто">
+              </div>
+            </div>
+            <div class="field">
+              <label for="propSize">Диаметър на витлото (инча)</label>
+              <select id="propSize"></select>
+              <p class="hint">Празно = автоматично (~25% от размаха).</p>
+            </div>
           </div>
         </div>
 
         <div class="pane" id="pane-print">
-          <div class="field">
-            <label for="filamentSelect">Филамент</label>
-            <select id="filamentSelect"></select>
-            <p class="hint" id="filamentInfo"></p>
-          </div>
-          <div class="grid-2">
+          <div class="group">
+            <div class="group-title">Материал и слой</div>
             <div class="field">
-              <label for="nozzle">Дюза (mm)</label>
-              <select id="nozzle">
-                <option value="0.4">0.4</option>
-                <option value="0.6">0.6</option>
-                <option value="0.8">0.8</option>
+              <label for="filamentSelect">Филамент</label>
+              <select id="filamentSelect"></select>
+              <p class="hint" id="filamentInfo"></p>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="nozzle">Дюза (mm)</label>
+                <select id="nozzle">
+                  <option value="0.4">0.4</option>
+                  <option value="0.6">0.6</option>
+                  <option value="0.8">0.8</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="layerHeight">Слой (mm)</label>
+                <input type="number" id="layerHeight" step="0.02" min="0.08"
+                       max="0.6" value="0.2">
+              </div>
+            </div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="perimeters">Периметри (стени)</label>
+                <input type="number" id="perimeters" step="1" min="1" max="6"
+                       placeholder="авто">
+              </div>
+              <div class="field">
+                <label for="infill">Запълване (%)</label>
+                <input type="number" id="infill" step="1" min="0" max="100"
+                       placeholder="авто">
+              </div>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Принтер</div>
+            <div class="field">
+              <label for="bedPreset">Готов размер на легло</label>
+              <select id="bedPreset">
+                <option value="">ръчно</option>
+                <option value="220x220x250">220×220×250</option>
+                <option value="180x180x180">180×180×180</option>
+                <option value="256x256x256">256×256×256</option>
               </select>
             </div>
             <div class="field">
-              <label for="layerHeight">Слой (mm)</label>
-              <input type="number" id="layerHeight" step="0.02" min="0.08"
-                     max="0.6" value="0.2">
-            </div>
-          </div>
-          <div class="grid-2">
-            <div class="field">
-              <label for="perimeters">Периметри (стени)</label>
-              <input type="number" id="perimeters" step="1" min="1" max="6"
-                     placeholder="авто">
-            </div>
-            <div class="field">
-              <label for="infill">Запълване (%)</label>
-              <input type="number" id="infill" step="1" min="0" max="100"
-                     placeholder="авто">
-            </div>
-          </div>
-          <div class="field">
-            <label>Легло на принтера (mm)</label>
-            <div class="grid-3">
-              <input type="number" id="bedX" step="5" min="80" value="220">
-              <input type="number" id="bedY" step="5" min="80" value="220">
-              <input type="number" id="bedZ" step="5" min="80" value="250">
+              <label>Легло на принтера X × Y × Z (mm)</label>
+              <div class="grid-3">
+                <input type="number" id="bedX" step="5" min="80" value="220" title="X">
+                <input type="number" id="bedY" step="5" min="80" value="220" title="Y">
+                <input type="number" id="bedZ" step="5" min="80" value="250" title="Z">
+              </div>
             </div>
           </div>
         </div>
+
+        <div class="pane" id="pane-prop">
+          <div class="group">
+            <div class="group-title">Печатно витло</div>
+            <div class="field">
+              <label for="propSelect">APC витло (геометрия)</label>
+              <select id="propSelect"></select>
+              <p class="hint">Файлове от папка PE0-FILES_WEB. Печатано витло е ориентировъчно и не е проверено за полет.</p>
+            </div>
+            <div class="grid-3">
+              <div class="field">
+                <label for="propRpm">Обороти (rpm)</label>
+                <input type="number" id="propRpm" step="500" min="500" value="8000">
+              </div>
+              <div class="field">
+                <label for="propMaterial">Материал</label>
+                <select id="propMaterial">
+                  <option value="pla">PLA</option>
+                  <option value="petg">PETG</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="propInfill">Запълване (%)</label>
+                <input type="number" id="propInfill" step="5" min="10" max="100" value="100">
+              </div>
+            </div>
+            <div class="row-actions">
+              <button class="btn" id="btnPropCheck">Провери</button>
+              <button class="btn" id="btnPropStl">Експорт STL</button>
+              <span class="hint" id="propStlInfo"></span>
+            </div>
+            <div id="propResult"></div>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-structure">
+          <div class="group">
+            <div class="group-title">Спар и джойнер</div>
+            <div class="grid-2">
+              <div class="field">
+                <label for="sparMaterial">Лента на спара</label>
+                <select id="sparMaterial">
+                  <option value="carbon">Въглеродна лента</option>
+                  <option value="aluminium">Алуминиева лента</option>
+                  <option value="wood">Дървена лента</option>
+                </select>
+              </div>
+              <div class="field">
+                <label for="joinerMaterial">Тръба на джойнера</label>
+                <select id="joinerMaterial">
+                  <option value="carbon">Въглеродна тръба</option>
+                  <option value="aluminium">Алуминиева тръба</option>
+                  <option value="fibreglass">Стъклопласт</option>
+                  <option value="steel">Стомана</option>
+                </select>
+              </div>
+            </div>
+            <div class="field">
+              <label for="profileSelect">Готов комплект материали</label>
+              <select id="profileSelect">
+                <option value="">ръчно</option>
+                <option value="budget">Алуминиев спар и джойнер, PLA</option>
+                <option value="standard">Въглероден спар и джойнер, PLA+</option>
+                <option value="highend">Въглероден спар и джойнер, LW-PLA (лек)</option>
+              </select>
+              <p class="hint">Попълва материалите, филамента и леглото; всяко поле може да се промени после.</p>
+            </div>
+          </div>
+          <div class="group">
+            <div class="group-title">Кореново сечение</div>
+            <div class="preview">
+              <canvas id="sparCanvas" width="600" height="300" data-fluid data-h="300"></canvas>
+            </div>
+            <p class="hint">Горе — целият профил в мащаб; долу — увеличен участък около спара.
+              Капсите са под обшивката, лентата е в процепа им, джойнерът е в канала на 1/4 хорда.</p>
+          </div>
+          <div class="group">
+            <div class="group-title">Изглед отгоре</div>
+            <div class="preview">
+              <canvas id="sparPlanCanvas" width="600" height="190" data-fluid data-h="190"></canvas>
+            </div>
+            <div id="sparInfo"></div>
+          </div>
+        </div>
+
       </div>
 
       <div class="side-footer">
         <span id="calcStatus">готово</span>
         <span class="spacer"></span>
-        <button class="btn btn-sm" id="btnReset">Нов</button>
+        <button class="btn btn-sm" id="btnReset" title="Изчиства формата и започва нов дизайн">Нов дизайн</button>
       </div>
     </section>
+
+    <div class="splitter" id="splitter" role="separator" aria-orientation="vertical"
+         title="Влачи, за да промениш ширината на панела · двойно щракване = по подразбиране"></div>
 
     <section class="results" id="results">
       <div class="results-head">
@@ -411,37 +624,7 @@
 
       <div class="cards" id="cards"></div>
 
-      <div class="block">
-        <h3>Проверки</h3>
-        <div id="checks" class="checks"></div>
-      </div>
-
-      <div class="block">
-        <h3>Геометрия</h3>
-        <table class="kv" id="geometryTable"></table>
-      </div>
-
-      <div class="block">
-        <h3>Задвижване</h3>
-        <table class="kv" id="propulsionTable"></table>
-      </div>
-
-      <div class="block">
-        <h3>Стабилност и център на тежестта</h3>
-        <table class="kv" id="stabilityTable"></table>
-      </div>
-
-      <div class="block">
-        <h3>Якост на крилото</h3>
-        <table class="kv" id="structureTable"></table>
-      </div>
-
-      <div class="block">
-        <h3>Печат</h3>
-        <table class="data" id="printTable"></table>
-      </div>
-
-      <div class="block">
+      <div class="block block-viewer">
         <h3>3D преглед</h3>
         <div class="viewer-bar">
           <button class="btn btn-sm" data-view="iso">3/4</button>
@@ -450,14 +633,20 @@
           <button class="btn btn-sm" data-view="front">Отпред</button>
           <span class="spacer"></span>
           <span class="hint" id="modelInfo"></span>
+          <button class="btn btn-sm" id="btnXray" aria-pressed="false"
+                  title="Полупрозрачна обшивка: виждат се спарът и джойнерът">◐ Вътрешност</button>
+          <button class="btn btn-sm" id="btnViewerFull"
+                  title="Цял екран (Esc за изход)">⛶ Цял екран</button>
         </div>
         <div class="viewer-canvas">
           <canvas id="model3d" width="900" height="460"></canvas>
           <canvas id="model3dOverlay" width="900" height="460"></canvas>
         </div>
         <p class="hint">
-          Влачене с мишката завърта, колелцето мащабира, двойно щракване
-          връща изгледа 3/4. Моделът е опростен — показва пропорциите
+          <b>Ляв бутон</b> — завъртане около центъра на изгледа ·
+          <b>десен/среден бутон</b> или <b>Shift + ляв</b> — местене ·
+          <b>колелце</b> — приближаване към курсора · <b>двойно щракване</b> —
+          начален изглед 3/4. Моделът е опростен — показва пропорциите
           (крило, фюзелаж, опашка, мотор), не е геометрия за печат.
         </p>
       </div>
@@ -465,15 +654,56 @@
       <div class="block">
         <h3>Графики</h3>
         <div class="charts">
-          <div>
-            <div class="chart-title">Аеродинамично качество L/D</div>
-            <canvas id="chartLD" width="470" height="200"></canvas>
+          <div class="chart-card">
+            <div class="chart-title">Аеродинамично качество L/D
+              <button class="btn btn-sm chart-info" data-chart-info="ld"
+                      title="Какво показва графиката">ⓘ Какво виждам?</button></div>
+            <canvas id="chartLD" width="900" height="320" data-fluid data-h="320"></canvas>
           </div>
-          <div>
-            <div class="chart-title">Мощност: нужна / налична (W)</div>
-            <canvas id="chartPower" width="470" height="200"></canvas>
+          <div class="chart-card">
+            <div class="chart-title">Мощност: нужна / налична (W)
+              <button class="btn btn-sm chart-info" data-chart-info="power"
+                      title="Какво показва графиката">ⓘ Какво виждам?</button></div>
+            <canvas id="chartPower" width="900" height="320" data-fluid data-h="320"></canvas>
           </div>
         </div>
+      </div>
+
+      <div class="block">
+        <h3>Проверки</h3>
+        <div id="checks" class="checks"></div>
+      </div>
+
+      <div class="results-grid">
+        <div class="block">
+          <h3>Геометрия</h3>
+          <table class="kv" id="geometryTable"></table>
+        </div>
+
+        <div class="block">
+          <h3>Задвижване</h3>
+          <table class="kv" id="propulsionTable"></table>
+        </div>
+
+        <div class="block">
+          <h3>Стабилност и център на тежестта</h3>
+          <table class="kv" id="stabilityTable"></table>
+        </div>
+
+        <div class="block">
+          <h3>Якост на крилото</h3>
+          <table class="kv" id="structureTable"></table>
+        </div>
+      </div>
+
+      <div class="block">
+        <h3>Печат</h3>
+        <table class="data" id="printTable"></table>
+      </div>
+
+      <div class="block">
+        <h3>Спар и джойнер — сравнение на материалите</h3>
+        <table class="data" id="materialTable"></table>
       </div>
 
       <div class="block">
@@ -520,6 +750,16 @@
       <button class="btn btn-sm" id="btnExportFolder" disabled>Отвори папката</button>
       <button class="btn btn-sm btn-accent" id="btnExportDone" disabled>Готово</button>
     </div>
+  </div>
+</div>
+
+<div class="modal hidden" id="chartInfoModal">
+  <div class="modal-box chart-info-box">
+    <div class="modal-head">
+      <h3 id="chartInfoTitle">Графика</h3>
+      <button class="btn btn-sm" id="btnCloseChartInfo">✕</button>
+    </div>
+    <div class="chart-info-body" id="chartInfoBody"></div>
   </div>
 </div>
 
@@ -570,11 +810,11 @@
         <h4>Филаменти</h4>
         <p class="hint">
           Плътността е на <b>отпечатаното</b> тяло (за LW-PLA е по-ниска от
-          тази на филамента). Цената е в € за kg. Тези стойности се използват
-          за масата, якостта, времето и цената на печата.
+          тази на филамента). Тези стойности се използват за масата, якостта
+          и времето на печата.
         </p>
         <div class="fil-head">
-          <span>Име</span><span>g/cm³</span><span>€/kg</span>
+          <span>Име</span><span>g/cm³</span>
           <span>MPa</span><span>E MPa</span><span>слоева</span>
           <span>дебит</span><span>разпен.</span><span></span>
         </div>
@@ -640,8 +880,17 @@
         </div>
         <p class="hint" id="settingsPathInfo"></p>
       </section>
-    </div>
 
+      <section class="settings-section">
+        <h4>Конструктивни материали (спар и джойнер)</h4>
+        <div id="catalogEditor"></div>
+        <div class="row-actions">
+          <button class="btn btn-sm" id="btnCatalogSave">Запази материалите</button>
+          <button class="btn btn-sm" id="btnCatalogReset">Върни вградените</button>
+        </div>
+        <p class="hint" id="catalogStatus"></p>
+      </section>
+    </div>
     <div class="modal-foot settings-foot">
       <button class="btn btn-sm" id="btnResetSettings">↺ Възстанови начални</button>
       <span class="spacer"></span>
@@ -654,11 +903,11 @@
 
 <script type="text/javascript" src="/eel.js"></script>
 <script src="js/api.js?v=072"></script>
-<script src="js/charts.js?v=072"></script>
-<script src="js/viewer3d.js?v=072"></script>
-<script src="js/ui.js?v=072"></script>
-<script src="js/settings.js?v=072"></script>
-<script src="js/app.js?v=072"></script>
+<script src="js/charts.js?v=083"></script>
+<script src="js/viewer3d.js?v=084"></script>
+<script src="js/ui.js?v=086"></script>
+<script src="js/settings.js?v=081"></script>
+<script src="js/app.js?v=083"></script>
 </body>
 </html>
 

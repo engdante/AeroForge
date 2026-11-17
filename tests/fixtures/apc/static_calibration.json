@@ -1,0 +1,173 @@
+{
+ "source": "APC PERFILES2 PER3_*.dat (статични точки J=0, 3000–7000 rpm, медиана)",
+ "props": [
+  {
+   "name": "10x10",
+   "diameter_in": 10.0,
+   "pitch_in": 10.0,
+   "cp_static": 0.0721,
+   "ct_static": 0.1357,
+   "fom_static": 0.5531
+  },
+  {
+   "name": "10x4",
+   "diameter_in": 10.0,
+   "pitch_in": 4.0,
+   "cp_static": 0.0329,
+   "ct_static": 0.0881,
+   "fom_static": 0.6349
+  },
+  {
+   "name": "10x5",
+   "diameter_in": 10.0,
+   "pitch_in": 5.0,
+   "cp_static": 0.0404,
+   "ct_static": 0.1029,
+   "fom_static": 0.6508
+  },
+  {
+   "name": "10x6",
+   "diameter_in": 10.0,
+   "pitch_in": 6.0,
+   "cp_static": 0.0479,
+   "ct_static": 0.1149,
+   "fom_static": 0.6489
+  },
+  {
+   "name": "10x7",
+   "diameter_in": 10.0,
+   "pitch_in": 7.0,
+   "cp_static": 0.0543,
+   "ct_static": 0.1232,
+   "fom_static": 0.635
+  },
+  {
+   "name": "11x10",
+   "diameter_in": 11.0,
+   "pitch_in": 10.0,
+   "cp_static": 0.0614,
+   "ct_static": 0.128,
+   "fom_static": 0.5955
+  },
+  {
+   "name": "11x7",
+   "diameter_in": 11.0,
+   "pitch_in": 7.0,
+   "cp_static": 0.0475,
+   "ct_static": 0.1156,
+   "fom_static": 0.6599
+  },
+  {
+   "name": "12x10",
+   "diameter_in": 12.0,
+   "pitch_in": 10.0,
+   "cp_static": 0.0561,
+   "ct_static": 0.1251,
+   "fom_static": 0.6298
+  },
+  {
+   "name": "12x6",
+   "diameter_in": 12.0,
+   "pitch_in": 6.0,
+   "cp_static": 0.0373,
+   "ct_static": 0.1003,
+   "fom_static": 0.68
+  },
+  {
+   "name": "12x8",
+   "diameter_in": 12.0,
+   "pitch_in": 8.0,
+   "cp_static": 0.0482,
+   "ct_static": 0.1173,
+   "fom_static": 0.6653
+  },
+  {
+   "name": "13x6",
+   "diameter_in": 13.0,
+   "pitch_in": 6.0,
+   "cp_static": 0.0291,
+   "ct_static": 0.085,
+   "fom_static": 0.6796
+  },
+  {
+   "name": "13x8",
+   "diameter_in": 13.0,
+   "pitch_in": 8.0,
+   "cp_static": 0.0372,
+   "ct_static": 0.0996,
+   "fom_static": 0.6738
+  },
+  {
+   "name": "14x7",
+   "diameter_in": 14.0,
+   "pitch_in": 7.0,
+   "cp_static": 0.0345,
+   "ct_static": 0.0975,
+   "fom_static": 0.7042
+  },
+  {
+   "name": "15x8",
+   "diameter_in": 15.0,
+   "pitch_in": 8.0,
+   "cp_static": 0.0357,
+   "ct_static": 0.1006,
+   "fom_static": 0.7128
+  },
+  {
+   "name": "16x8",
+   "diameter_in": 16.0,
+   "pitch_in": 8.0,
+   "cp_static": 0.033,
+   "ct_static": 0.0964,
+   "fom_static": 0.7236
+  },
+  {
+   "name": "6x4",
+   "diameter_in": 6.0,
+   "pitch_in": 4.0,
+   "cp_static": 0.0593,
+   "ct_static": 0.1187,
+   "fom_static": 0.5505
+  },
+  {
+   "name": "7x6",
+   "diameter_in": 7.0,
+   "pitch_in": 6.0,
+   "cp_static": 0.0652,
+   "ct_static": 0.1261,
+   "fom_static": 0.548
+  },
+  {
+   "name": "8x4",
+   "diameter_in": 8.0,
+   "pitch_in": 4.0,
+   "cp_static": 0.0407,
+   "ct_static": 0.0975,
+   "fom_static": 0.5972
+  },
+  {
+   "name": "8x6",
+   "diameter_in": 8.0,
+   "pitch_in": 6.0,
+   "cp_static": 0.0549,
+   "ct_static": 0.1179,
+   "fom_static": 0.5885
+  },
+  {
+   "name": "9x4",
+   "diameter_in": 9.0,
+   "pitch_in": 4.0,
+   "cp_static": 0.0361,
+   "ct_static": 0.0923,
+   "fom_static": 0.6198
+  },
+  {
+   "name": "9x6",
+   "diameter_in": 9.0,
+   "pitch_in": 6.0,
+   "cp_static": 0.0508,
+   "ct_static": 0.1163,
+   "fom_static": 0.6224
+  }
+ ]
+}

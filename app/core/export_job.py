@@ -8,9 +8,10 @@ Eel (gevent) не може да обслужи втори RPC, докато ед
 
 Стъпки (виж `solidcraft_export.group_steps`):
 
-    prep    — сечения (SVG + manifest) + 3MF от мрежата + референции
-    group   — по една група тела в SolidCraft (тяло, крило, опашка…)
-    finish  — STEP + 3MF от solid-а, `eval` проверка, PNG превю, README
+    prep     — сечения (SVG + manifest) + 3MF от мрежата + референции
+    profiles — само профилите (скици) в aircraft.sc, без loft
+    group    — по една група тела в работния дизайн (loft + combine)
+    finish   — STEP + 3MF от solid-а, `eval` проверка, PNG превю, README
 
 Задачата живее в паметта (`JOBS`) и е независима от UI: същата машина
 ползва и синхронният `solidcraft_export.export()`.
@@ -138,8 +139,9 @@ def _unjoin(bodies, names):
 
 
 def max_asymmetry_mm(eval_data):
-    """Най-голямата разлика |min Y| срещу |max Y| сред телата (mm)."""
-    worst = 0.0
+    """Разликата между общия ляв/десен обхват на всички тела (mm)."""
+    min_y = None
+    max_y = None
     for body in (eval_data or {}).get("bodies") or []:
         bbox = body.get("bbox") or {}
         low = bbox.get("min")
@@ -147,18 +149,23 @@ def max_asymmetry_mm(eval_data):
         if not low or not high:
             continue
         try:
-            worst = max(worst, abs(abs(float(low[1])) - abs(float(high[1]))))
+            body_min = float(low[1])
+            body_max = float(high[1])
         except (TypeError, ValueError, IndexError):
             continue
-    return worst
+        min_y = body_min if min_y is None else min(min_y, body_min)
+        max_y = body_max if max_y is None else max(max_y, body_max)
+    if min_y is None or max_y is None:
+        return 0.0
+    return abs(abs(min_y) - abs(max_y))
 
 
 def _check_symmetry(job, step):
     """
     Warning, ако моделът е асиметричен по размаха.
 
-    Липсващо полукрило не се вижда в `eval` (то е слято с тялото), но се
-    вижда веднага по bbox: едното крило стига до +span/2, другото липсва.
+    Сравнява общия bbox на модела, а не отделните тела: отделните половини
+    на стабилизатора са асиметрични поотделно, но симетрични заедно.
     """
     geometry = job["res"].get("geometry") or {}
     span = float(geometry.get("span_mm") or 0.0)
@@ -246,7 +253,9 @@ def start(res, base_dir, quality=None, detail=None, slugify=None, options=None):
 
     `options`: {"run": bool, "split": bool, "exact_tail": bool,
                 "quality_3mf": "standard|fine|finest", "timeout": s,
-                "save_design": bool}
+                "save_design": bool,
+                "detailed": bool — детайлният модел aircraft_detailed.sc
+                (по подразбиране True)}
     """
     if not res or not res.get("ok"):
         return {"ok": False, "error": "няма изчислен дизайн"}
@@ -263,17 +272,32 @@ def start(res, base_dir, quality=None, detail=None, slugify=None, options=None):
     split = bool(options.get("split", True))
     exact_tail = bool(options.get("exact_tail", False))
     join_tail = bool(options.get("join_tail", False))
+    layout = res.get("layout") or {}
+    wing_root_gap = max(0.0, min(40.0, float(
+        layout.get("wing_root_gap_mm", layout.get("root_gap_mm", 10.0)) or 0.0)))
+    tail_root_gap = max(0.0, min(40.0, float(
+        layout.get("tail_root_gap_mm", layout.get("root_gap_mm", 10.0)) or 0.0)))
     sink = assembly.wing_root_sink(res)
     bodies = assembly.loft_bodies(res, quality, detail, split=split,
                                   sink_mm=sink, exact_tail=exact_tail,
                                   nose_one_piece=bool(
                                       options.get("nose_one_piece", False)),
-                                  join_tail=join_tail)
+                                  join_tail=join_tail,
+                                  wing_root_gap_mm=wing_root_gap,
+                                  tail_root_gap_mm=tail_root_gap)
     if not bodies:
         return {"ok": False, "error": "няма геометрия за гладък модел"}
 
     cli = sc.find_cli() if options.get("run", True) else None
     steps = sc.group_steps(bodies)
+    if options.get("detailed", True):
+        # детайлният модел е отделен дизайн (aircraft_detailed.sc): стъпка
+        # преди финала, за да влезе в README/манифеста; неуспехът ѝ не
+        # засяга основния модел
+        steps.insert(len(steps) - 1, {
+            "id": "detailed", "kind": "detailed",
+            "label": "Детайлен модел (aircraft_detailed.sc)",
+            "bodies": [], "est_s": 90.0})
     for step in steps:
         step.update({"state": "pending", "ms": None, "error": None,
                      "detail": None})
@@ -300,6 +324,8 @@ def start(res, base_dir, quality=None, detail=None, slugify=None, options=None):
         "signal_cli": bool(options.get("run", True)),
         "split": split,
         "sink_mm": sink,
+        "wing_root_gap_mm": wing_root_gap,
+        "tail_root_gap_mm": tail_root_gap,
         "timeout": float(options.get("timeout") or STEP_TIMEOUT_S),
         "save_design": bool(options.get("save_design", True)),
         "quality_3mf": options.get("quality_3mf") or "fine",
@@ -311,9 +337,14 @@ def start(res, base_dir, quality=None, detail=None, slugify=None, options=None):
         "error": None,
         "script_path": os.path.join(folder, "solidcraft_model.json"),
         "design_path": os.path.join(folder, "aircraft.sc"),
+        # работен дизайн на стъпките: същите скици + loft + join → STEP
+        "loft_design_path": os.path.join(steps_dir, "loft.sc"),
         "step_path": os.path.join(folder, "aircraft.step"),
         "three_mf": os.path.join(folder, "aircraft.3mf"),
         "preview_path": os.path.join(folder, "preview.png"),
+        "detailed_design_path": os.path.join(folder, "aircraft_detailed.sc"),
+        "detailed_step_path": os.path.join(folder, "aircraft_detailed.step"),
+        "detailed_preview_path": os.path.join(folder, "preview_detailed.png"),
         "readme_path": os.path.join(folder, "README.txt"),
         "manifest_path": os.path.join(folder, "model_manifest.json"),
         "sections_manifest": os.path.join(sections_dir, "manifest.csv"),
@@ -353,6 +384,48 @@ def _do_prep(job, step):
          % (count, info.get("objects") or 0))
 
 
+def _do_profiles(job, step):
+    """
+    Стъпката след prep: `aircraft.sc` = само профилите (скици), без loft.
+
+    Свързването (loft + join) не е тук — то е в работния дизайн на
+    стъпките (`steps/loft.sc`), от който идва `aircraft.step`.
+    """
+    script_path = os.path.join(job["steps_dir"], "profiles.json")
+    script = sc.profiles_script(job["bodies"])
+    with open(script_path, "w", encoding="utf-8") as f:
+        json.dump(script, f, ensure_ascii=False, indent=1)
+    sketches = sum(1 for command in script["commands"]
+                   if command["command"] == "sketch.create")
+    bodies = sc.profile_bodies(job["bodies"])
+    step["detail"] = "%d тела · %d скици" % (len(bodies), sketches)
+    job["files"]["profiles_script"] = {
+        "path": script_path, "bytes": os.path.getsize(script_path)}
+    if not job["cli"]:
+        step["state"] = "skipped"
+        step["detail"] = (step["detail"] or "") + " · няма solidcraft-cli"
+        return
+    if not job["save_design"]:
+        step["state"] = "skipped"
+        step["detail"] = (step["detail"] or "") + " · дизайнът не се записва"
+        return
+    out = sc.run_group(script_path, job["design_path"], first=True,
+                       timeout=_step_timeout(job, step), cli=job["cli"],
+                       save=True)
+    step["ms"] = out.get("ms")
+    if out.get("ok") and os.path.exists(job["design_path"]):
+        step["state"] = "done"
+        step["detail"] = _timing_text(out.get("timing")) or step["detail"]
+        _log(job, "профилите са в aircraft.sc: %d скици за %.1f s"
+             % (sketches, (out.get("ms") or 0) / 1000.0))
+        return
+    message = _error_text(out)
+    step["state"] = "error"
+    step["error"] = message
+    job["warnings"].append("%s: %s" % (step["label"], message))
+    _log(job, "профилите не са записани: %s" % message[:120])
+
+
 def _do_group(job, step):
     """Стъпка 2..n: една група тела през SolidCraft (loft + combine)."""
     if not job["cli"]:
@@ -375,6 +448,11 @@ def _do_group(job, step):
     for attempt, overrides in enumerate(attempts):
         bodies = job["bodies"]
         if overrides:
+            layout = job["res"].get("layout") or {}
+            wing_root_gap = max(0.0, min(40.0, float(
+                layout.get("wing_root_gap_mm", layout.get("root_gap_mm", 10.0)) or 0.0)))
+            tail_root_gap = max(0.0, min(40.0, float(
+                layout.get("tail_root_gap_mm", layout.get("root_gap_mm", 10.0)) or 0.0)))
             bodies = assembly.loft_bodies(
                 job["res"], job["quality"], job["detail"],
                 split=job.get("split", True),
@@ -383,7 +461,9 @@ def _do_group(job, step):
                 nose_one_piece=job.get("options", {}).get("nose_one_piece",
                                                           False),
                 join_tail=job.get("options", {}).get("join_tail", False),
-                tail_lift_mm=overrides.get("tail_lift_mm"))
+                tail_lift_mm=overrides.get("tail_lift_mm"),
+                wing_root_gap_mm=wing_root_gap,
+                tail_root_gap_mm=tail_root_gap)
             if overrides.get("unjoin"):
                 # последен опит: крилата остават отделни тела, за да има
                 # пълен (макар и необединен) модел вместо половин крило
@@ -392,7 +472,7 @@ def _do_group(job, step):
             json.dump(sc.group_script(bodies, step["bodies"]), f,
                       ensure_ascii=False, indent=1)
         first = not job.get("design_ok")
-        out = sc.run_group(script_path, job["design_path"], first=first,
+        out = sc.run_group(script_path, job["loft_design_path"], first=first,
                            timeout=_step_timeout(job, step), cli=job["cli"],
                            save=job["save_design"])
         last = out
@@ -407,7 +487,7 @@ def _do_group(job, step):
                     " · опит %d" % (attempt + 1)
                 _log(job, "%s: мина от опит %d (%s)"
                      % (step["label"], attempt + 1, overrides))
-            job["design_ok"] = os.path.exists(job["design_path"])
+            job["design_ok"] = os.path.exists(job["loft_design_path"])
             step["state"] = "done"
             _log(job, "%s: готово за %.1f s"
                  % (step["label"], (out.get("ms") or 0) / 1000.0))
@@ -427,7 +507,7 @@ def _do_group(job, step):
     if step["id"] == "body" or not job.get("design_ok"):
         job["design_broken"] = True
         job["design_ok"] = False
-        path = job.get("design_path")
+        path = job.get("loft_design_path")
         if path and os.path.exists(path):
             try:
                 os.remove(path)
@@ -457,14 +537,21 @@ def _do_finish(job, step):
     script_path = os.path.join(job["steps_dir"], "finish.json")
     with open(script_path, "w", encoding="utf-8") as f:
         json.dump({"commands": commands}, f, ensure_ascii=False, indent=1)
-    if os.path.exists(job["design_path"]):
-        out = sc.run_group(script_path, job["design_path"], first=False,
+    if os.path.exists(job["loft_design_path"]):
+        out = sc.run_group(script_path, job["loft_design_path"], first=False,
                            timeout=max(job["timeout"], 180), cli=cli,
                            save=False)
     else:
         # нищо не е построено: пълен скрипт без joins, за да има файл
+        layout = job["res"].get("layout") or {}
+        plain_wing_gap = max(0.0, min(40.0, float(
+            layout.get("wing_root_gap_mm", layout.get("root_gap_mm", 10.0)) or 0.0)))
+        plain_tail_gap = max(0.0, min(40.0, float(
+            layout.get("tail_root_gap_mm", layout.get("root_gap_mm", 10.0)) or 0.0)))
         plain = assembly.loft_bodies(job["res"], job["quality"], job["detail"],
-                                     joins=False)
+                                     joins=False,
+                                     wing_root_gap_mm=plain_wing_gap,
+                                     tail_root_gap_mm=plain_tail_gap)
         with open(script_path, "w", encoding="utf-8") as f:
             json.dump(sc.build_script(plain, job["step_path"]), f,
                       ensure_ascii=False, indent=1)
@@ -512,6 +599,95 @@ def _do_finish(job, step):
 
 
 
+DETAILED_TIMEOUT_S = 420.0
+DETAILED_MAX_RETRIES = 14      # резервни опити (сливане, отвор, кормила)
+
+
+def _do_detailed(job, step):
+    """
+    Детайлният модел: кухо тяло с капак, крило със седло/джойнер/щифт/винт,
+    гнезда за серво, елерони с шарнирна панта — отделен `aircraft_detailed.sc`
+    (+ `.step`). Скриптът е в `steps/detailed.json` и може да се пусне на ръка.
+    """
+    from . import detailed_model
+    script = detailed_model.build_script(job["res"], job["quality"],
+                                         job["detail"],
+                                         out_step=job["detailed_step_path"])
+    job["detailed_notes"] = list(script["notes"])
+    script_path = os.path.join(job["steps_dir"], "detailed.json")
+    with open(script_path, "w", encoding="utf-8") as f:
+        json.dump({"commands": script["commands"]}, f, ensure_ascii=False,
+                  indent=1)
+    job["files"]["detailed_script"] = {"path": script_path,
+                                       "bytes": os.path.getsize(script_path)}
+    step["detail"] = "%d команди" % len(script["commands"])
+    if not script["commands"]:
+        step["state"] = "skipped"
+        step["detail"] = "; ".join(script["notes"]) or "няма геометрия"
+        return
+    if not job["cli"]:
+        step["state"] = "skipped"
+        step["detail"] += " · няма solidcraft-cli (скриптът е записан)"
+        return
+    def run(current):
+        for path in (job["detailed_step_path"], job["detailed_design_path"]):
+            if os.path.exists(path):
+                os.remove(path)
+        with open(script_path, "w", encoding="utf-8") as f:
+            json.dump({"commands": current["commands"]}, f,
+                      ensure_ascii=False, indent=1)
+        return sc.run_group(script_path, job["detailed_design_path"],
+                            first=True,
+                            timeout=max(_step_timeout(job, step),
+                                        DETAILED_TIMEOUT_S),
+                            cli=job["cli"], save=True)
+
+    out = run(script)
+    total_ms = out.get("ms") or 0
+    # SolidCraft понякога отказва сливането на повърхност с тялото („Bad
+    # CurveCusp“ — почти допирателна пресечна крива): резервните варианти
+    # за точно тази повърхност (detailed_model.FALLBACKS), накрая — отделно тяло
+    variants, attempts = {}, {}
+    for _retry in range(DETAILED_MAX_RETRIES):
+        feature = None if out.get("ok") else detailed_model.failed_feature(
+            out.get("errors"), script["commands"])
+        if not feature:
+            break
+        new = detailed_model.next_variants(variants, feature,
+                                           attempts.get(feature, 0))
+        if new is None:
+            break
+        attempts[feature] = attempts.get(feature, 0) + 1
+        variants = new
+        _log(job, "„%s“ е отказано от SolidCraft — повтарям (%s)"
+             % (feature, variants))
+        script = detailed_model.build_script(
+            job["res"], job["quality"], job["detail"],
+            out_step=job["detailed_step_path"], variants=variants)
+        job["detailed_notes"] = list(script["notes"])
+        out = run(script)
+        total_ms += out.get("ms") or 0
+    out["ms"] = total_ms
+    step["ms"] = out.get("ms")
+    if out.get("ok") and os.path.exists(job["detailed_step_path"]):
+        ev = sc.evaluate(job["detailed_step_path"], cli=job["cli"]) or {}
+        job["detailed_eval"] = ev
+        sc.snapshot(job["detailed_step_path"], job["detailed_preview_path"],
+                    cli=job["cli"])
+        step["state"] = "done"
+        step["detail"] = "%s тела · %s" % (
+            ev.get("body_count") or "?",
+            _timing_text(out.get("timing")) or "%.0f s" % ((out.get("ms") or 0) / 1000.0))
+        _log(job, "детайлният модел е готов: %s тела" % ev.get("body_count"))
+        return
+    message = _error_text(out) if out.get("errors") or out.get("error") \
+        else "SolidCraft не записа aircraft_detailed.step"
+    step["state"] = "error"
+    step["error"] = message
+    job["warnings"].append("%s: %s" % (step["label"], message))
+    _log(job, "детайлният модел не е построен: %s" % message[:160])
+
+
 def _write_outputs(job, source="mesh"):
     """README + model_manifest.json (файлове, стъпки, времена, проверка)."""
     files = job["files"]
@@ -519,8 +695,15 @@ def _write_outputs(job, source="mesh"):
         files["aircraft_step"] = {"path": job["step_path"],
                                   "bytes": os.path.getsize(job["step_path"])}
     if os.path.exists(job["design_path"]):
-        files["aircraft_design"] = {"path": job["design_path"],
-                                    "bytes": os.path.getsize(job["design_path"])}
+        files["aircraft_design"] = {
+            "path": job["design_path"],
+            "bytes": os.path.getsize(job["design_path"]),
+            "contents": "profiles"}
+    if os.path.exists(job["loft_design_path"]):
+        files["loft_design"] = {
+            "path": job["loft_design_path"],
+            "bytes": os.path.getsize(job["loft_design_path"]),
+            "contents": "loft+join"}
     if os.path.exists(job["three_mf"]):
         info = job.get("three_mf_info") or {}
         if source == "solidcraft":
@@ -535,7 +718,17 @@ def _write_outputs(job, source="mesh"):
     if job.get("preview"):
         files["preview"] = {"path": job["preview"],
                             "bytes": os.path.getsize(job["preview"])}
+    for key, path, extra in (
+            ("detailed_design", job.get("detailed_design_path"),
+             {"contents": "detailed"}),
+            ("detailed_step", job.get("detailed_step_path"), {}),
+            ("detailed_preview", job.get("detailed_preview_path"), {})):
+        if path and os.path.exists(path):
+            files[key] = dict(extra, path=path, bytes=os.path.getsize(path))
     info = {
+        "detailed_notes": job.get("detailed_notes"),
+        "detailed_built": bool(job.get("detailed_step_path")
+                               and os.path.exists(job["detailed_step_path"])),
         "three_mf": job.get("three_mf_info") or {},
         "wing_offset_desc": (job["res"].get("layout") or {}).get(
             "wing_offset_desc"),
@@ -560,11 +753,17 @@ def _write_outputs(job, source="mesh"):
             "class": layer.get("wing_position"),
             "description": layer.get("wing_offset_desc"),
             "root_sink_mm": job["sink_mm"],
+            "root_gap_mm": max(0.0, min(40.0, float(
+                layer.get("wing_root_gap_mm",
+                          layer.get("root_gap_mm", 10.0)) or 0.0))),
         },
         "tail": {
             "type": layer.get("tail_type"),
             "planform": layer.get("tail_planform"),
             "tip_style": layer.get("tail_tip_style"),
+            "root_gap_mm": max(0.0, min(40.0, float(
+                layer.get("tail_root_gap_mm",
+                          layer.get("root_gap_mm", 10.0)) or 0.0))),
         },
         "bodies": [{"name": b["name"], "kind": b["kind"],
                     "sections": len(b.get("sections") or []),
@@ -574,6 +773,8 @@ def _write_outputs(job, source="mesh"):
                    "ms": s["ms"], "detail": s.get("detail"),
                    "error": s.get("error")} for s in job["steps"]],
         "eval": job.get("eval"),
+        "detailed": {"notes": job.get("detailed_notes") or [],
+                     "eval": job.get("detailed_eval")},
         "warnings": job.get("warnings") or [],
         "files": files,
     }
@@ -581,12 +782,14 @@ def _write_outputs(job, source="mesh"):
         json.dump(manifest, f, ensure_ascii=False, indent=1)
     files["manifest"] = {"path": job["manifest_path"]}
     # SolidCraft пази резервно копие при --save; не е нужно в папката
-    backup = job["design_path"] + ".bak"
-    if os.path.exists(backup):
-        try:
-            os.remove(backup)
-        except OSError:
-            pass
+    for design in (job["design_path"], job["loft_design_path"],
+                   job.get("detailed_design_path") or ""):
+        backup = design + ".bak"
+        if os.path.exists(backup):
+            try:
+                os.remove(backup)
+            except OSError:
+                pass
 
 
 
@@ -616,8 +819,12 @@ def run_step(job_id, index=None):
     try:
         if step["kind"] == "prep":
             _do_prep(job, step)
+        elif step["kind"] == "profiles":
+            _do_profiles(job, step)
         elif step["kind"] == "group":
             _do_group(job, step)
+        elif step["kind"] == "detailed":
+            _do_detailed(job, step)
         else:
             _do_finish(job, step)
     except Exception as exc:  # noqa: BLE001 — експортът не бива да гърми

@@ -16,12 +16,21 @@ RHO = 1.225
 ETA_MOTOR = 0.80        # КПД на безчетков мотор под товар
 ETA_ESC = 0.95          # КПД на регулатора
 ETA_PROP = 0.55         # КПД на витлото в крейсер
-FIGURE_OF_MERIT = 0.65  # качество на витлото при статична тяга
+# Калибрирано по APC PER3 (21 витла, статични точки): медиана на FOM = 0.635.
+FIGURE_OF_MERIT = 0.635  # качество на витлото при статична тяга
 TIP_SPEED_MAX = 0.60 * 343.0   # m/s — граница по шум/ефективност
 LIPO_CELL_V = 3.70      # номинално напрежение на клетка
 LIPO_CELL_FULL_V = 4.20  # пълно напрежение — за проверка на върховите обороти
-PROP_CP0 = 0.030        # коефициент на мощност на витлото (статичен, емпиричен)
+# Калибрирано по APC PER3: Cp_static = 0.0030 + 0.0688·(P/D). Моделът
+# използва стъпка P = 0.6·D (виж size_system), т.е. Cp ≈ 0.044.
+PROP_CP0 = 0.044
 DOD = 0.80              # използваем заряд на батерията
+# Всеки полет: излитане на пълна мощност и кратък набор на височина.
+# Оценки за оразмеряване на батерията, не измерени профили.
+TAKEOFF_S = 10.0        # s на пълна мощност при излитане
+CLIMB_RATE_MS = 2.0     # m/s — набор на височина
+CLIMB_S = 30.0          # s набор на полет
+C_MAX_CAP_C = 35.0      # най-голям продължителен С при автоматичен капацитет
 MOTOR_W_PER_G = 4.0     # W входна мощност на грам мотор
 ESC_W_PER_G = 12.0      # W на грам ESC
 MOTOR_MIN_G = 35.0      # минимална маса на мотор (малките мотори не стават по-леки)
@@ -195,8 +204,19 @@ def size_system(mass_kg, geom, v_stall_ms, v_cruise_ms, mission,
         cd0_used, v_cruise_ms, ETA_PROP)
     p_elec_cruise = cruise["p_shaft_w"] / (ETA_MOTOR * ETA_ESC)
 
-    energy_needed_wh = p_elec_cruise * endurance_min / 60.0 / DOD
+    # Енергия за излитане и набор (на полет), добавена към крейсера.
+    e_takeoff_wh = p_max_elec * TAKEOFF_S / 3600.0
+    p_climb_elec = (mass_kg * G * CLIMB_RATE_MS
+                    / (ETA_PROP * ETA_MOTOR * ETA_ESC))
+    e_climb_wh = p_climb_elec * CLIMB_S / 3600.0
+    e_flight_extra_wh = e_takeoff_wh + e_climb_wh
+
+    energy_needed_wh = ((p_elec_cruise * endurance_min / 60.0
+                         + e_flight_extra_wh) / DOD)
     cap_auto_ah = energy_needed_wh / voltage if voltage > 0 else 0.0
+    # Пакетът трябва да поема пиковия ток без да е претоварен (C-оценка):
+    # капацитетът не пада под i_max / C_MAX_CAP_C.
+    cap_auto_ah = max(cap_auto_ah, i_max / C_MAX_CAP_C)
 
     if capacity_mah:
         cap_ah = float(capacity_mah) / 1000.0
@@ -210,7 +230,8 @@ def size_system(mass_kg, geom, v_stall_ms, v_cruise_ms, mission,
     capacity_mah_used = cap_ah * 1000.0
     energy_wh = cap_ah * voltage
     usable_wh = energy_wh * DOD
-    endurance_actual = (usable_wh / p_elec_cruise * 60.0
+    endurance_actual = (max(0.0, usable_wh - e_flight_extra_wh)
+                        / p_elec_cruise * 60.0
                         if p_elec_cruise > 0 else 0.0)
     c_needed = i_max / cap_ah if cap_ah > 0 else 0.0
     battery_mass_est_g = (energy_wh
@@ -228,6 +249,8 @@ def size_system(mass_kg, geom, v_stall_ms, v_cruise_ms, mission,
         "voltage_v": voltage,
         "power_to_weight": p2w,
         "p_max_elec_w": p_max_elec,
+        "energy_takeoff_wh": e_takeoff_wh,
+        "energy_climb_wh": e_climb_wh,
         "p_max_shaft_w": p_shaft_avail,
         "p_max_shaft_raw_w": p_shaft_raw,
         "p_elec_recommended_w": p_elec_recommended,

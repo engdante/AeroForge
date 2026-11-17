@@ -122,6 +122,11 @@ class TestComputeAndExport(unittest.TestCase):
         })
         self.assertTrue(res["ok"], res.get("error"))
         self.assertIn("geometry", res)
+        # схемата „спар и джойнер“ идва заедно с изчислението за UI
+        view = res.get("structure_view")
+        self.assertIsNotNone(view)
+        self.assertIn("cap", view)
+        self.assertIn("joiner", view)
 
     def test_compute_design_bad_input_returns_error(self):
         res = server.compute_design("това не е dict")
@@ -260,3 +265,36 @@ class TestDesignStorage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_EEL, "eel не е инсталиран")
+class TestPathContainment(unittest.TestCase):
+    """Проверката за път вътре в папка не бива да приема съседни папки с общ префикс."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp(prefix="aeroforge_contain_")
+        self.base = os.path.join(self.tmp, "exports")
+        self.sibling = os.path.join(self.tmp, "exports_evil")
+        os.makedirs(self.base)
+        os.makedirs(self.sibling)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_sibling_with_common_prefix_is_rejected(self):
+        self.assertFalse(server._inside(self.sibling, self.base))
+        self.assertFalse(server._inside(os.path.join(self.sibling, "x"), self.base))
+
+    def test_base_and_children_are_accepted(self):
+        self.assertTrue(server._inside(self.base, self.base))
+        self.assertTrue(server._inside(os.path.join(self.base, "Дан_01"), self.base))
+
+    def test_parent_traversal_is_rejected(self):
+        self.assertFalse(server._inside(os.path.join(self.base, "..", "secret"), self.base))
+
+    def test_open_export_refuses_sibling_folder(self):
+        from unittest import mock
+        with mock.patch.object(server, "EXPORT_DIR", self.base):
+            result = server.open_export(self.sibling)
+        self.assertFalse(result.get("ok"))

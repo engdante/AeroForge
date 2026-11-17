@@ -1,4 +1,4 @@
-﻿"""
+"""
 Тестове за опростения 3D модел (geometry3d).
 
 Проверява се, че геометрията е валидна (крайни числа, правилен размах,
@@ -13,7 +13,7 @@ import unittest
 
 import _env  # noqa: F401  (sys.path + изолирани настройки)
 
-from core import design, geometry3d  # noqa: E402
+from core import assembly, design, geometry3d  # noqa: E402
 
 
 def trainer_result(**overrides):
@@ -77,6 +77,24 @@ class TestModelStructure(unittest.TestCase):
         ys = wing["points"][1::3]
         self.assertAlmostEqual(max(ys), -min(ys), delta=1.5)
 
+    def test_tail_airfoil_selection_changes_3d_tail_geometry(self):
+        def tail_parts(airfoil):
+            result = trainer_result(tail={"airfoil": airfoil})
+            model = geometry3d.build_model(result, quality="low")
+            return {part["name"]: part["points"] for part in model["parts"]
+                    if part["name"] in ("Стабилизатор", "Кил")}
+
+        default_tail = tail_parts("naca0009")
+        selected_tail = tail_parts("naca0012")
+        self.assertEqual(set(selected_tail), set(default_tail))
+        for name, points in default_tail.items():
+            with self.subTest(part=name):
+                self.assertNotEqual(points, selected_tail[name])
+
+        selected_model = geometry3d.build_model(
+            trainer_result(tail={"airfoil": "naca0012"}), quality="low")
+        self.assertEqual(selected_model["info"]["tail_airfoil"], "NACA 0012")
+
     def test_model_is_json_serializable(self):
         text = json.dumps(self.model)
         self.assertGreater(len(text), 1000)
@@ -117,6 +135,32 @@ class TestWingTipGeometry(unittest.TestCase):
         names = [p["name"] for p in model["parts"]]
         self.assertIn("Уинглет (дясно)", names)
         self.assertIn("Уинглет (ляво)", names)
+
+    def test_root_gap_adds_visible_bridge_parts(self):
+        model = geometry3d.build_model(
+            trainer_result(layout={"root_gap_mm": 10.0}))
+        names = [part["name"] for part in model["parts"]]
+        self.assertIn("Крило", names)
+        self.assertIn("Фюзелаж", names)
+        self.assertIn("Връзки корен крило", names)
+        self.assertIn("Връзки корен опашка", names)
+        self.assertIn("Връзка корен кил", names)
+
+    def test_root_gap_moves_displayed_panels_and_keeps_them_symmetric(self):
+        res = trainer_result(layout={"wing_root_gap_mm": 10.0})
+        model = geometry3d.build_model(res)
+        wing = next(part for part in model["parts"] if part["name"] == "Крило")
+        ys = wing["points"][1::3]
+        half_gap = (res["geometry"]["fuselage"]["width_mm"] / 2.0 +
+                    res["layout"]["wing_root_gap_mm"])
+        self.assertAlmostEqual(min(ys), -res["geometry"]["span_mm"] / 2.0,
+                               places=1)
+        self.assertAlmostEqual(max(ys), res["geometry"]["span_mm"] / 2.0,
+                               places=1)
+        self.assertGreaterEqual(min(value for value in ys if value > 0),
+                                half_gap)
+        self.assertLessEqual(max(value for value in ys if value < 0),
+                             -half_gap)
 
     def test_upturned_tip_rises(self):
         def wing_top(res):
@@ -180,13 +224,139 @@ class TestQualityLevels(unittest.TestCase):
 
     def test_spinner_sits_in_front_of_the_nose(self):
         model = geometry3d.build_model(self.res)
-        motor = [p for p in model["parts"] if p["name"] == "Мотор"][0]
-        xs = motor["points"][0::3]
+        spinner = [p for p in model["parts"] if p["name"] == "Спинер"][0]
+        xs = spinner["points"][0::3]
         self.assertLess(min(xs), 0.0)
 
     def test_unknown_quality_falls_back(self):
         self.assertEqual(geometry3d.quality_of("hyper"), "high")
         self.assertEqual(geometry3d.quality_of("ultra"), "ultra")
+
+
+class TestInterElementDistances(unittest.TestCase):
+    """
+    Регресионни тестове: разстоянията между елементите в 3D модела
+    съвпадат с изчислените размери (размах, дължина, root gap).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.res = trainer_result()
+        cls.model = geometry3d.build_model(cls.res)
+        cls.g = cls.res["geometry"]
+        cls.fus = cls.g["fuselage"]
+        cls.layout = cls.res["layout"]
+
+    def _part_points(self, name):
+        for part in self.model["parts"]:
+            if part["name"] == name:
+                return part["points"]
+        return None
+
+    def test_span_matches_design_in_model(self):
+        """Общият размах на модела = span_mm от дизайна."""
+        ys = []
+        for part in self.model["parts"]:
+            ys.extend(part["points"][1::3])
+        span = max(ys) - min(ys)
+        self.assertAlmostEqual(span, self.g["span_mm"], delta=1.0)
+
+    def test_length_matches_design_in_model(self):
+        """Дължината на модела = length_mm (± спинер)."""
+        xs = []
+        for part in self.model["parts"]:
+            xs.extend(part["points"][0::3])
+        model_length = max(xs) - min(xs)
+        fus_length = self.fus["length_mm"]
+        self.assertGreaterEqual(model_length, fus_length * 0.95)
+        self.assertLessEqual(model_length, fus_length * 1.15)
+
+    def _skin(self, x_mm, axis=(0.0, 1.0, 0.0)):
+        return assembly.skin_offset(self.fus, x_mm, axis)
+
+    def test_wing_root_gap_distance_is_correct(self):
+        """Коренът на крилото е на локалната кожа + wing_root_gap от y=0."""
+        wing_gap = float(self.layout.get("wing_root_gap_mm", 10.0))
+        if wing_gap <= 0:
+            self.skipTest("wing_root_gap е 0")
+        expected_root_y = self._skin(self.g["wing_le_mm"]) + wing_gap
+        wing_pts = self._part_points("Крило")
+        if wing_pts is None:
+            self.fail("Няма част 'Крило'")
+        ys = wing_pts[1::3]
+        pos = [y for y in ys if y > 0]
+        neg = [y for y in ys if y < 0]
+        self.assertAlmostEqual(min(pos), expected_root_y, delta=1.0)
+        self.assertAlmostEqual(max(neg), -expected_root_y, delta=1.0)
+
+    def test_wing_bridge_spans_the_gap(self):
+        """Мостът запълва от локалната кожа -3 до кожа + gap + 3."""
+        wing_gap = float(self.layout.get("wing_root_gap_mm", 10.0))
+        if wing_gap <= 0:
+            self.skipTest("wing_root_gap е 0")
+        skin = self._skin(self.g["wing_le_mm"])
+        bridge_pts = self._part_points("Връзки корен крило")
+        if bridge_pts is None:
+            self.fail("Няма част 'Връзки корен крило'")
+        ys = bridge_pts[1::3]
+        min_abs = min(abs(y) for y in ys)
+        max_abs = max(abs(y) for y in ys)
+        self.assertAlmostEqual(min_abs, skin - 3.0, delta=1.0)
+        self.assertAlmostEqual(max_abs, skin + wing_gap + 3.0, delta=1.0)
+
+    def test_tail_root_gap_distance_is_correct(self):
+        """Коренът на стабилизатора е на локалната кожа + tail_gap от y=0."""
+        tail_type = self.layout.get("tail_type", "conventional")
+        if tail_type != "conventional":
+            self.skipTest("Не е конвенционална опашка")
+        tail_gap = float(self.layout.get("tail_root_gap_mm", 10.0))
+        if tail_gap <= 0:
+            self.skipTest("tail_root_gap е 0")
+        tail = self.g["tail"]
+        x_h = max(self.g["wing_le_mm"] + self.g["c_root_mm"],
+                  tail["tail_ac_mm"] - 0.25 * tail["c_h_mm"])
+        x_h = min(x_h, max(0.0, self.fus["length_mm"] - tail["c_h_mm"]))
+        expected_root_y = self._skin(x_h) + tail_gap
+        stab_pts = self._part_points("Стабилизатор")
+        if stab_pts is None:
+            self.fail("Няма част 'Стабилизатор'")
+        ys = stab_pts[1::3]
+        pos = [y for y in ys if y > 0]
+        neg = [y for y in ys if y < 0]
+        self.assertAlmostEqual(min(pos), expected_root_y, delta=1.5)
+        self.assertAlmostEqual(max(neg), -expected_root_y, delta=1.5)
+
+    def test_tail_bridge_spans_the_gap(self):
+        """Мостът на опашката запълва пропаста от кожата до панела."""
+        tail_type = self.layout.get("tail_type", "conventional")
+        if tail_type != "conventional":
+            self.skipTest("Не е конвенционална опашка")
+        tail_gap = float(self.layout.get("tail_root_gap_mm", 10.0))
+        if tail_gap <= 0:
+            self.skipTest("tail_root_gap е 0")
+        tail = self.g["tail"]
+        x_h = max(self.g["wing_le_mm"] + self.g["c_root_mm"],
+                  tail["tail_ac_mm"] - 0.25 * tail["c_h_mm"])
+        x_h = min(x_h, max(0.0, self.fus["length_mm"] - tail["c_h_mm"]))
+        skin = self._skin(x_h)
+        bridge_pts = self._part_points("Връзки корен опашка")
+        if bridge_pts is None:
+            self.fail("Няма част 'Връзки корен опашка'")
+        ys = bridge_pts[1::3]
+        min_abs = min(abs(y) for y in ys)
+        max_abs = max(abs(y) for y in ys)
+        self.assertAlmostEqual(min_abs, skin - 3.0, delta=1.0)
+        self.assertAlmostEqual(max_abs, skin + tail_gap + 3.0, delta=1.0)
+
+    def test_wing_tip_reaches_full_span(self):
+        """Крайчетата на крилото достигат ±span/2."""
+        half_span = self.g["span_mm"] / 2.0
+        wing_pts = self._part_points("Крило")
+        if wing_pts is None:
+            self.fail("Няма част 'Крило'")
+        ys = wing_pts[1::3]
+        self.assertAlmostEqual(max(ys), half_span, delta=1.0)
+        self.assertAlmostEqual(min(ys), -half_span, delta=1.0)
 
 
 class TestModelVariants(unittest.TestCase):

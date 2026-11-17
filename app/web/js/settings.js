@@ -15,6 +15,7 @@ const Settings = {
       this.data = await API.getSettings();
       this._savedUi = Object.assign({}, (this.data.defaults || {}).ui);
       this.render();
+      this.loadCatalog();
       this.$("settingsStatus").textContent = this.data.custom
         ? "използват се твоите настройки"
         : "използват се вградените стойности";
@@ -116,11 +117,14 @@ const Settings = {
     const f = spec || {};
     const row = UI.el("div", "fil-row");
     row.dataset.key = f.key || "";
+    // цената не се показва, но се пази (ядрото я изисква в settings.json)
+    if (f.price_per_kg !== undefined && f.price_per_kg !== null) {
+      row.dataset.price = String(f.price_per_kg);
+    }
 
     const fields = [
       ["name", "text", f.name || "", "име"],
       ["printed_density", "number", f.printed_density, "1.24"],
-      ["price_per_kg", "number", f.price_per_kg, "20"],
       ["tensile_mpa", "number", f.tensile_mpa, "50"],
       ["e_mpa", "number", f.e_mpa, "3500"],
       ["layer_factor", "number", f.layer_factor, "0.65"],
@@ -178,7 +182,7 @@ const Settings = {
         key: key,
         name: name,
         printed_density: val("printed_density"),
-        price_per_kg: val("price_per_kg"),
+        price_per_kg: row.dataset.price || "",
         tensile_mpa: val("tensile_mpa"),
         e_mpa: val("e_mpa"),
         layer_factor: val("layer_factor"),
@@ -275,6 +279,8 @@ const Settings = {
     });
     this.$("btnSaveSettings").addEventListener("click", () => this.save());
     this.$("btnResetSettings").addEventListener("click", () => this.reset());
+    this.$("btnCatalogSave").addEventListener("click", () => this.saveCatalog());
+    this.$("btnCatalogReset").addEventListener("click", () => this.resetCatalog());
 
     // жива промяна на изгледа (шрифт / размер)
     const applyLive = () => {
@@ -293,13 +299,95 @@ const Settings = {
     this.$("btnAddFilament").addEventListener("click", () => this.addRow({
       name: "Нов филамент",
       printed_density: 1.24,
-      price_per_kg: 25,
       tensile_mpa: 45,
       e_mpa: 2500,
       layer_factor: 0.65,
       max_flow: 11,
       expansion: 1,
     }));
+  },
+  // ----- конструктивни материали (catalog.json; отделно от settings.json).
+  // Цените не се показват; заредените стойности се пазят при запис.
+  CATALOG_MATERIAL_FIELDS: [
+    ["density", "Плътност (g/cm³)"], ["e_mpa", "E (MPa)"],
+    ["allow_mpa", "Допустимо (MPa)"],
+  ],
+  CATALOG_MATERIALS: [
+    ["carbon", "Карбон"], ["aluminium", "Алуминий"],
+    ["fibreglass", "Фибростъкло"], ["wood", "Дърво"], ["steel", "Стомана"],
+  ],
+
+  async loadCatalog() {
+    const res = await API.getCatalog();
+    if (!res.ok) {
+      this.$("catalogStatus").textContent = res.error || "грешка в каталога";
+      return;
+    }
+    this.renderCatalog(res);
+    this.$("catalogStatus").textContent = "вградената стойност се вижда при посочване на полето";
+  },
+
+  renderCatalog(res) {
+    const box = this.$("catalogEditor");
+    box.innerHTML = "";
+    const defaults = res.defaults || {};
+    this._catalogLoaded = res;
+    const mat = document.createElement("table");
+    mat.className = "data";
+    const mhead = document.createElement("tr");
+    mhead.appendChild(UI.el("th", null, "Материал"));
+    this.CATALOG_MATERIAL_FIELDS.forEach(([, label]) => mhead.appendChild(UI.el("th", null, label)));
+    mat.appendChild(mhead);
+    this.CATALOG_MATERIALS.forEach(([key, label]) => {
+      const tr = document.createElement("tr");
+      tr.appendChild(UI.el("td", null, label));
+      this.CATALOG_MATERIAL_FIELDS.forEach(([field]) => {
+        const td = document.createElement("td");
+        const input = UI.el("input");
+        input.type = "number"; input.min = "0"; input.step = "any";
+        input.value = res.materials[key][field];
+        input.dataset.mat = key; input.dataset.field = field;
+        input.title = "вградена: " + defaults.materials[key][field];
+        td.appendChild(input);
+        tr.appendChild(td);
+      });
+      mat.appendChild(tr);
+    });
+    box.appendChild(mat);
+  },
+
+  readCatalog() {
+    // скритите полета (цени) се връщат такива, каквито са заредени
+    const loaded = this._catalogLoaded || {};
+    const electronics = JSON.parse(JSON.stringify(loaded.electronics || {}));
+    const materials = {};
+    Object.entries(loaded.materials || {}).forEach(([key, props]) => {
+      if (props && props.price_eur_kg !== undefined) {
+        materials[key] = { price_eur_kg: props.price_eur_kg };
+      }
+    });
+    document.querySelectorAll("#catalogEditor input[data-mat]").forEach((el) => {
+      (materials[el.dataset.mat] = materials[el.dataset.mat] || {})[el.dataset.field] = el.value;
+    });
+    return { electronics, materials };
+  },
+
+  async saveCatalog() {
+    const res = await API.saveCatalog(this.readCatalog());
+    if (!res.ok) {
+      this.$("catalogStatus").textContent = "не е записано: " + res.error;
+      return;
+    }
+    this.renderCatalog(res);
+    this.$("catalogStatus").textContent = "материалите са записани";
+  },
+
+  async resetCatalog() {
+    const res = await API.resetCatalog();
+    if (res.ok) {
+      this.renderCatalog(res);
+      this.$("catalogStatus").textContent = "върнати са вградените стойности";
+    }
   },
 };
 

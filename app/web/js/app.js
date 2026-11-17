@@ -23,9 +23,21 @@ const App = {
     this.bind();
     Settings.bind();
     Viewer.init();
+    UI.loadPropellers();
     document.querySelectorAll(".viewer-bar [data-view]").forEach((btn) => {
       btn.addEventListener("click", () => Viewer.setView(btn.dataset.view));
     });
+    this.bindViewerFullscreen();
+    this.bindChartInfo();
+    const xray = document.getElementById("btnXray");
+    if (xray) {
+      const sync = () => {
+        xray.classList.toggle("active", Viewer.xray);
+        xray.setAttribute("aria-pressed", String(Viewer.xray));
+      };
+      xray.addEventListener("click", () => { Viewer.setXray(!Viewer.xray); sync(); });
+      sync();
+    }
     await this.compute();
   },
 
@@ -90,6 +102,14 @@ const App = {
       .addEventListener("change", () => UI.updateFilamentInfo());
     document.getElementById("airfoilSelect")
       .addEventListener("change", () => UI.updateAirfoilInfo());
+    document.getElementById("btnPropCheck")
+      .addEventListener("click", () => UI.checkPropeller());
+    document.getElementById("btnPropStl")
+      .addEventListener("click", () => UI.exportPropellerStl());
+    document.getElementById("profileSelect")
+      .addEventListener("change", (event) => UI.applyProfile(event.target.value));
+    document.getElementById("bedPreset")
+      .addEventListener("change", (event) => UI.applyBedPreset(event.target.value));
     document.getElementById("tipStyle")
       .addEventListener("change", () => UI.syncWinglet());
 
@@ -176,6 +196,13 @@ const App = {
     document.getElementById("btnReset")
       .addEventListener("click", () => this.reset());
 
+    // Резултатните секции се сгъват/разгъват с клик върху заглавието
+    document.querySelectorAll(".block > h3").forEach((h) => {
+      h.classList.add("collapsible");
+      h.title = "Щракни, за да сгънеш или разгънеш";
+      h.addEventListener("click", () => h.parentElement.classList.toggle("collapsed"));
+    });
+
     const status = document.getElementById("calcStatus");
     status.style.cursor = "pointer";
     status.title = "Двойно щракване отваря последната папка с файлове";
@@ -186,6 +213,8 @@ const App = {
         API.openFolder("exports");
       }
     });
+
+    this.bindSplitter();
 
     window.addEventListener("resize", debounce(() => {
       if (this.result) {
@@ -202,6 +231,119 @@ const App = {
     });
     document.querySelectorAll(".pane").forEach((pane) => {
       pane.classList.toggle("active", pane.id === "pane-" + name);
+    });
+    // мини-графиките в скрит таб нямат ширина — прерисуване при показване
+    this.redrawSidePreviews();
+  },
+
+  redrawSidePreviews() {
+    UI.updateAirfoilInfo();
+    if (this.result) {
+      Charts.fuselageSide(document.getElementById("fuselageCanvas"),
+                          this.result);
+    }
+  },
+
+  /**
+   * Разделител между панела с параметрите и резултатите: влачене променя
+   * ширината (пази се локално), двойно щракване връща подразбиращата се.
+   */
+  bindSplitter() {
+    const splitter = document.getElementById("splitter");
+    const side = document.querySelector(".side");
+    if (!splitter || !side) return;
+    const KEY = "aeroforge.sideWidth";
+    const apply = (px) => {
+      if (px) {
+        const max = Math.max(380, window.innerWidth - 420);
+        side.style.setProperty("--side-w",
+          Math.round(Math.min(max, Math.max(340, px))) + "px");
+      } else {
+        side.style.removeProperty("--side-w");
+      }
+    };
+    const relayout = () => window.dispatchEvent(new Event("resize"));
+    try {
+      const saved = Number(localStorage.getItem(KEY));
+      if (saved > 0) apply(saved);
+    } catch (err) { /* без localStorage — ширината по подразбиране */ }
+
+    splitter.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      splitter.setPointerCapture(event.pointerId);
+      splitter.classList.add("dragging");
+      document.body.classList.add("resizing");
+      const left = side.getBoundingClientRect().left;
+      const move = (ev) => apply(ev.clientX - left);
+      const up = () => {
+        splitter.removeEventListener("pointermove", move);
+        splitter.removeEventListener("pointerup", up);
+        splitter.removeEventListener("pointercancel", up);
+        splitter.classList.remove("dragging");
+        document.body.classList.remove("resizing");
+        try {
+          localStorage.setItem(KEY, String(Math.round(side.offsetWidth)));
+        } catch (err) { /* няма значение */ }
+        relayout();
+      };
+      splitter.addEventListener("pointermove", move);
+      splitter.addEventListener("pointerup", up);
+      splitter.addEventListener("pointercancel", up);
+    });
+    splitter.addEventListener("dblclick", () => {
+      apply(0);
+      try { localStorage.removeItem(KEY); } catch (err) { /* няма значение */ }
+      relayout();
+    });
+  },
+
+  /** Бутоните „ⓘ Какво виждам?“ над графиките → прозорец с обяснения. */
+  bindChartInfo() {
+    const modal = document.getElementById("chartInfoModal");
+    if (!modal) return;
+    const titles = {
+      ld: "Аеродинамично качество L/D",
+      power: "Мощност: нужна / налична",
+    };
+    const close = () => modal.classList.add("hidden");
+    document.querySelectorAll("[data-chart-info]").forEach((btn) => {
+      btn.addEventListener("click", (event) => {
+        event.stopPropagation();   // заглавието на блока не се сгъва
+        const kind = btn.dataset.chartInfo;
+        document.getElementById("chartInfoTitle").textContent = titles[kind] || "";
+        document.getElementById("chartInfoBody").innerHTML =
+          UI.chartInfoHtml(kind, this.result);
+        modal.classList.remove("hidden");
+      });
+    });
+    document.getElementById("btnCloseChartInfo").addEventListener("click", close);
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) close();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") close();
+    });
+  },
+
+  /** 3D прегледът на цял екран (Esc излиза). */
+  bindViewerFullscreen() {
+    const btn = document.getElementById("btnViewerFull");
+    // на цял екран отива целият блок — бутоните за изглед остават видими
+    const box = document.querySelector(".block-viewer");
+    if (!btn || !box || !box.requestFullscreen) {
+      if (btn) btn.classList.add("hidden");
+      return;
+    }
+    btn.addEventListener("click", () => {
+      if (document.fullscreenElement) {
+        document.exitFullscreen();
+      } else {
+        box.requestFullscreen().catch(() => {});
+      }
+    });
+    document.addEventListener("fullscreenchange", () => {
+      // размерът на сцената се сменя — прерисуване в новия размер
+      requestAnimationFrame(() => Viewer.render());
     });
   },
 
@@ -415,8 +557,12 @@ const App = {
         (mesh.source === "solidcraft" ? " (от solid-а)" : " (от мрежата)"));
     }
     if (files.aircraft_design) {
-      lines.push("aircraft.sc — дизайн за редакция, " +
+      lines.push("aircraft.sc — само профили (без loft), " +
         (files.aircraft_design.bytes / 1e6).toFixed(1) + " MB");
+    }
+    if (files.loft_design) {
+      lines.push("steps/loft.sc — същите профили + loft + join, " +
+        (files.loft_design.bytes / 1e6).toFixed(1) + " MB");
     }
     if (files.preview) lines.push("preview.png — iso изглед");
     const evalInfo = res.eval || null;

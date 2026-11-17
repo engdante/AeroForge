@@ -1,13 +1,15 @@
-﻿"""
+"""
 design.py — оркестратор: от входните данни до пълен дизайн.
 
 compute() е чиста функция (dict -> dict) и се използва както от Eel
 backend-а, така и от тестовете.
 """
 
+import copy
 import math
 
 from . import aero
+from . import controls
 from . import airfoils
 from . import cg
 from . import fuselage
@@ -15,6 +17,8 @@ from . import layout
 from . import materials
 from . import presets
 from . import printcost
+from . import profiles
+from . import structmat
 from . import propulsion
 from . import settings as app_settings
 from . import structure
@@ -68,7 +72,11 @@ def default_inputs():
                 "chord_mm": None,
             },
             "airfoil": airfoils.DEFAULT_AIRFOIL,
-            "wing_le_ratio": 0.30,
+            # елерони: дялове (None = авто по мисията; хорда 0 = без елерони)
+            "ailerons": {"chord_frac": None, "start_frac": None,
+                         "end_frac": None},
+            # None = автоматично (крилото се поставя, за да падне батерията в обхвата)
+            "wing_le_ratio": None,
         },
         "tail": {
             "type": "conventional",
@@ -80,6 +88,8 @@ def default_inputs():
             "planform": "tapered",
             "tip_style": "square",
             "v_deg": None,
+            # кормила: хорда като дял (None = авто по мисията, 0 = без)
+            "controls": {"elevator_frac": None, "rudder_frac": None},
         },
         "fuselage": {
             "length_mm": None,
@@ -100,6 +110,9 @@ def default_inputs():
             # отместване на крилото от средното положение, mm (+ нагоре);
             # None = ползва се класът wing_position (стари дизайни)
             "wing_offset_mm": None,
+            # Разстояние от обшивката на фюзелажа до корените на крило/опашка.
+            "wing_root_gap_mm": 10.0,
+            "tail_root_gap_mm": 10.0,
         },
         "propulsion": {
             "cells": prop["cells"],
@@ -120,6 +133,12 @@ def default_inputs():
         "structure": {
             "n_limit": None,
             "safety_factor": 1.5,
+            "spar_material": "carbon",
+            "joiner_material": "carbon",
+        },
+        "bom": {
+            "electronics": "standard",
+            "profile": None,
         },
     }
 
@@ -202,6 +221,87 @@ def wing_aero(cfg, geom, mission):
     return design, e_used, nominal["e"]
 
 
+SPAR_MATERIALS = ("carbon", "aluminium", "wood")
+JOINER_MATERIALS = ("carbon", "aluminium", "fibreglass", "steel")
+
+
+def _choice(value, default, options):
+    """Стойността, ако е от допустимите; иначе подразбиращата се."""
+    return value if value in options else default
+
+
+def structure_option(st, geom, spar, joiner, span_mm=None):
+    """
+    Маса и цена на конструктивните елементи за даден избор спар/джойнер.
+
+    Спарът е армировката на целия размах (ленти по капсите); джойнерите са
+    два профила с дължина 1.1 × хорда. Масата се добавя към рамата в
+    evaluate (чрез _structure_extra_g) и се показва в BOM и в сравнението.
+    """
+    span = float(span_mm if span_mm is not None else geom["span_mm"])
+    spar_mat = structmat.get(spar)
+    joiner_mat = structmat.get(joiner)
+
+    spar_g = 0.0
+    if st["carbon_required"]:
+        area = st["carbon"]["total_area_mm2"]
+        spar_g = area * span * spar_mat["density"] / 1000.0
+
+    tube = st["joiner_tube"]
+    joiner_ok = bool(tube.get("od_mm"))
+    joiner_g = 0.0
+    if joiner_ok:
+        per_m = structmat.tube_mass_g_per_m(tube["od_mm"], tube["id_mm"],
+                                            joiner_mat["density"])
+        joiner_g = per_m * (tube["length_mm"] / 1000.0) * tube["count"]
+
+    cost = (spar_g / 1000.0 * spar_mat["price_eur_kg"]
+            + joiner_g / 1000.0 * joiner_mat["price_eur_kg"])
+    ok = (joiner_ok and st["adhesive_ok"] and st["deflection_ok"]
+          and st.get("compression_ok", True)
+          and (st["print_ok"] or st["carbon_required"]))
+    return {
+        "spar": spar,
+        "joiner": joiner,
+        "ok": bool(ok),
+        "spar_g": spar_g,
+        "joiner_g": joiner_g,
+        "mass_g": spar_g + joiner_g,
+        "cost_eur": cost,
+        "adhesive_ok": st["adhesive_ok"],
+        "deflection_ok": st["deflection_ok"],
+        "joiner_ok": joiner_ok,
+    }
+
+
+def _structure_extra_g(total_g, geom, fil, mission, cfg, spar_mat, joiner_mat):
+    """
+    Допълнителната маса на конструкцията (g) при дадена обща маса:
+    удебеляването на печатания капс + армировката (спар) + джойнерите.
+    """
+    st = structure.analyse(
+        total_g / 1000.0, geom, fil, mission, cfg["airfoil_key"],
+        n_limit=cfg["n_limit"], safety_factor=cfg["safety_factor"],
+        perimeters=cfg["perimeters"], nozzle=cfg["nozzle"],
+        spar_material=spar_mat, joiner_material=joiner_mat)
+    row = structure_option(st, geom, spar_mat, joiner_mat)
+    return st["cap_extra_g"] + row["mass_g"]
+
+
+def material_comparison(mass_kg, geom, fil, mission, cfg):
+    """Таблица: всяка комбинация спар × джойнер (3 × 4 = 12 реда)."""
+    rows = []
+    for spar in SPAR_MATERIALS:
+        for joiner in JOINER_MATERIALS:
+            st = structure.analyse(
+                mass_kg, geom, fil, mission, cfg["airfoil_key"],
+                n_limit=cfg["n_limit"], safety_factor=cfg["safety_factor"],
+                perimeters=cfg["perimeters"], nozzle=cfg["nozzle"],
+                spar_material=spar, joiner_material=joiner)
+            rows.append(structure_option(st, geom, spar, joiner))
+    return rows
+
+
 def normalize(inputs):
     """Слива входа с подразбиращите се стойности и привежда типовете."""
     base = default_inputs()
@@ -249,8 +349,16 @@ def normalize(inputs):
     prop = merged.get("propulsion") or {}
     prt = merged.get("print") or {}
     stc = merged.get("structure") or {}
+    bomc = merged.get("bom") or {}
     fus = merged.get("fuselage") or {}
     lay = merged.get("layout") or {}
+    # Обратна съвместимост: стари дизайни с един общ root_gap_mm
+    # се прилагат за и крилото и опашката.
+    _legacy_gap = _num(lay.get("root_gap_mm"), None)
+    _wing_gap = (_legacy_gap if _legacy_gap is not None
+                 else _num(lay.get("wing_root_gap_mm"), 10.0))
+    _tail_gap = (_legacy_gap if _legacy_gap is not None
+                 else _num(lay.get("tail_root_gap_mm"), 10.0))
 
     return {
         "name": str(merged.get("name") or base["name"])[:60],
@@ -276,7 +384,8 @@ def normalize(inputs):
             "winglet": _winglet_config(wing.get("winglet"),
                                        wing.get("tip_style")),
             "airfoil": wing.get("airfoil") or base["wing"]["airfoil"],
-            "wing_le_ratio": _num(wing.get("wing_le_ratio"), 0.30),
+            "ailerons": controls.normalize_input(wing.get("ailerons")),
+            "wing_le_ratio": _num(wing.get("wing_le_ratio"), None),
         },
         "tail": {
             "type": tail.get("type") or "conventional",
@@ -286,6 +395,7 @@ def normalize(inputs):
             "tail_arm_ratio": _num(tail.get("tail_arm_ratio")),
             "airfoil": tail.get("airfoil") or base["tail"]["airfoil"],
             "v_deg": _num(tail.get("v_deg")),
+            "controls": controls.normalize_tail_input(tail.get("controls")),
         },
         "fuselage": {
             "length_mm": _num(fus.get("length_mm")),
@@ -315,6 +425,8 @@ def normalize(inputs):
             # отместване на крилото от средното положение, mm (+ нагоре);
             # None = ползва се класът wing_position (стари дизайни)
             "wing_offset_mm": _num(lay.get("wing_offset_mm")),
+            "wing_root_gap_mm": max(0.0, min(40.0, _wing_gap)),
+            "tail_root_gap_mm": max(0.0, min(40.0, _tail_gap)),
         },
         "propulsion": {
             "cells": int(presets.clamp(
@@ -340,6 +452,15 @@ def normalize(inputs):
         "structure": {
             "n_limit": _num(stc.get("n_limit")),
             "safety_factor": _num(stc.get("safety_factor"), 1.5),
+            "spar_material": _choice(stc.get("spar_material"), "carbon",
+                                     SPAR_MATERIALS),
+            "joiner_material": _choice(stc.get("joiner_material"), "carbon",
+                                       JOINER_MATERIALS),
+        },
+        "bom": {
+            "electronics": _choice(bomc.get("electronics"), "standard",
+                                   tuple(profiles.ELECTRONICS_EUR)),
+            "profile": bomc.get("profile") or None,
         },
     }
 
@@ -407,7 +528,15 @@ def resolve(inp):
              else mission.get("washout_deg", presets.DEFAULT_WASHOUT_DEG)),
             0.0, 4.0),
         "winglet": _winglet_config(inp["wing"].get("winglet"), tip_style),
-        "wing_le_ratio": presets.clamp(inp["wing"]["wing_le_ratio"], 0.10, 0.60),
+        "ailerons": controls.resolve(
+            inp["wing"].get("ailerons"), mission, tip_style,
+            (inp["wing"].get("tip_frac")
+             if inp["wing"].get("tip_frac") is not None
+             else aero.default_tip_frac(tip_style))),
+        "wing_le_auto": inp["wing"]["wing_le_ratio"] is None,
+        "wing_le_ratio": presets.clamp(
+            0.30 if inp["wing"]["wing_le_ratio"] is None
+            else inp["wing"]["wing_le_ratio"], 0.10, 0.60),
         "vh": presets.clamp(
             (inp["tail"]["vh"] if inp["tail"]["vh"] is not None
              else mission["vh"]), 0.0, 1.2),
@@ -425,6 +554,7 @@ def resolve(inp):
         "tail_type": (inp["tail"].get("type")
                       if inp["tail"].get("type") in layout.TAIL_TYPES
                       else "conventional"),
+        "tail_controls_input": inp["tail"].get("controls"),
         "tail_planform": (inp["tail"].get("planform")
                           if inp["tail"].get("planform") in aero.TAIL_PLANFORMS
                           else "tapered"),
@@ -439,6 +569,8 @@ def resolve(inp):
         "propulsion_layout": inp["layout"]["propulsion"],
         "wing_position": inp["layout"]["wing_position"],
         "wing_offset_mm": inp["layout"].get("wing_offset_mm"),
+        "wing_root_gap_mm": inp["layout"]["wing_root_gap_mm"],
+        "tail_root_gap_mm": inp["layout"]["tail_root_gap_mm"],
         "motor_count": layout.motor_count(inp["layout"]["propulsion"]),
         "cells": inp["propulsion"]["cells"],
         "capacity_mah": inp["propulsion"]["capacity_mah"],
@@ -508,7 +640,7 @@ def capacity_from_mass(mass_g, cells):
     return energy_wh / voltage * 1000.0
 
 
-def compute(inputs):
+def compute_core(inputs):
     """
     Главна функция: входни данни -> пълен дизайн (dict).
 
@@ -536,7 +668,8 @@ def compute(inputs):
     if mode == "simple":
         payload_known = inp["payload"]["total_g"]
         provided = set(weight.CATEGORIES.keys())   # нищо не се оценява
-        capacity = capacity_from_mass(0.42 * payload_known, cfg["cells"])
+        # Капацитетът идва от желаното време (U4), освен ако е зададен ръчно.
+        capacity = cfg["capacity_mah"] or None
     else:
         if payload_known <= 0:
             payload_known = inp["payload"]["total_g"]
@@ -615,7 +748,12 @@ def compute(inputs):
                                taper_v=aero.TAIL_PLANFORMS[
                                    cfg["tail_planform"]]["taper_v"])
         parts = printcost.estimate_airframe(geom, tail, fus, print_cfg, fil)
-        airframe = sum(p["mass_g"] for p in parts)
+        # Армировката, джойнерите и удебеляването на капса са част от рамата
+        airframe = (sum(p["mass_g"] for p in parts)
+                    + _structure_extra_g(
+                        total_g, geom, fil, mission, cfg,
+                        inp["structure"]["spar_material"],
+                        inp["structure"]["joiner_material"]))
         return {
             "total_g": total_g,
             "wing_loading": wing_loading,
@@ -745,8 +883,30 @@ def compute(inputs):
     cfg["oswald_nominal"] = e_nominal
     cfg["wing_aero"] = wing
 
-    return build_result(inp, cfg, state, user_components, mode, iterations,
-                        converged, print_cfg, feasible)
+    result = build_result(inp, cfg, state, user_components, mode, iterations,
+                          converged, print_cfg, feasible)
+
+    # Автоматично крило: ако търсенето намира по-добра позиция (батерията
+    # пада в обхвата), прилагаме я и преизчисляваме веднъж с фиксирана стойност.
+    if cfg.get("wing_le_auto") and result.get("ok"):
+        geo = result["geometry"]
+        rec_mm = geo.get("wing_le_recommended_mm")
+        fus_mm = geo["fuselage"]["length_mm"]
+        if rec_mm and abs(rec_mm - geo["wing_le_mm"]) > 5.0:
+            fixed = copy.deepcopy(inputs)
+            fixed.setdefault("wing", {})["wing_le_ratio"] = rec_mm / fus_mm
+            result = _compute_fixed(fixed)
+    return result
+
+
+def compute(inputs):
+    """Публичният вход: пълен дизайн с автоматично крило, когато е зададено „авто“."""
+    return compute_core(inputs)
+
+
+def _compute_fixed(inputs):
+    """compute_core с фиксирано крило (без втори автоматичен проход)."""
+    return compute_core(inputs)
 
 
 
@@ -845,10 +1005,16 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
         if best is not None:
             wing_le_recommended = best[1]
 
+    spar_mat = inp["structure"]["spar_material"]
+    joiner_mat = inp["structure"]["joiner_material"]
     st = structure.analyse(
         total_g / 1000.0, geom, fil, mission, cfg["airfoil_key"],
         n_limit=cfg["n_limit"], safety_factor=cfg["safety_factor"],
-        perimeters=cfg["perimeters"], nozzle=cfg["nozzle"])
+        perimeters=cfg["perimeters"], nozzle=cfg["nozzle"],
+        spar_material=spar_mat, joiner_material=joiner_mat)
+    struct_row = structure_option(st, geom, spar_mat, joiner_mat)
+    comparison = material_comparison(total_g / 1000.0, geom, fil, mission,
+                                     cfg)
 
     # V-опашка: панелът, който дава същите хоризонтална и вертикална
     # проекция като изчислените S_h и S_v.
@@ -873,6 +1039,26 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
     re_cruise = aero.reynolds(state["v_cruise"], geom["mac_m"])
     wing_loading = aero.wing_loading_g_dm2(total_g, geom["area_m2"])
     summary = printcost.summarize(parts)
+
+    # BOM: печат + конструкция (спар/джойнер) + електроника (EUR, ориентировъчно)
+    elec_class = inp["bom"]["electronics"]
+    battery_ah = float(spec["battery"]["capacity_mah"]) / 1000.0
+    elec_lines = profiles.electronics_cost(
+        elec_class, cfg["motor_count"], cfg["motor_count"],
+        4 if cfg["has_tail"] else 2, battery_ah, cfg["has_tail"])
+    elec_eur = sum(x["total_eur"] for x in elec_lines)
+    bom = {
+        "currency": "EUR",
+        "electronics_class": elec_class,
+        "print_eur": summary["cost"],
+        "structure_eur": struct_row["cost_eur"],
+        "structure_g": struct_row["mass_g"],
+        "printed_cap_extra_g": st["cap_extra_g"],
+        "electronics_eur": elec_eur,
+        "electronics_lines": elec_lines,
+        "total_eur": summary["cost"] + struct_row["cost_eur"] + elec_eur,
+        "note": "ориентировъчни цени — редактируеми",
+    }
 
     curves = aero.speed_sweep(
         total_g / 1000.0, geom["area_m2"], geom["aspect_ratio"],
@@ -959,6 +1145,8 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
             "wing_offset_clamped": wing_place["clamped"],
             "wing_offset_desc": _wing_offset_desc(wing_place),
             "wing_z_mm": wing_place["z_mm"],
+            "wing_root_gap_mm": cfg["wing_root_gap_mm"],
+            "tail_root_gap_mm": cfg["tail_root_gap_mm"],
             "tail_type": cfg["tail_type"],
             "tail_type_label": layout.TAIL_TYPES[cfg["tail_type"]]["label"],
             "tail_planform": cfg["tail_planform"],
@@ -1032,6 +1220,7 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
                                       or cfg["winglet"]["chord_mm"]),
                             area_dm2=(cfg.get("wing_aero", {}).get("winglet")
                                       or {}).get("area_dm2", 0.0) * 2.0),
+            "ailerons": controls.geometry(cfg["ailerons"], geom),
             "bending_factor": geom.get("bending_factor", 1.0),
             "wing_loading_g_dm2": wing_loading,
             "dihedral_deg": cfg["dihedral_deg"],
@@ -1072,7 +1261,12 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
                 "has_coords": cfg["airfoil"]["has_coords"],
                 "code": cfg["airfoil"]["code"],
             },
+            "tail_controls": controls.resolve_tail(
+                cfg.get("tail_controls_input"),
+                cfg["mission"], cfg["tail_type"]),
             "tail_airfoil": cfg["tail_airfoil"],
+            # килът винаги е със симетричен профил (виж airfoils.fin_airfoil)
+            "fin_airfoil": airfoils.fin_airfoil(cfg["tail_airfoil"]),
         },
         "aero": {
             "v_stall_ms": stall["v_stall_ms"],
@@ -1111,5 +1305,7 @@ def build_result(inp, cfg, state, user_components, mode, iterations,
         "structure": st,
         "print": summary,
         "checks": checks,
+        "material_comparison": comparison,
+        "bom": bom,
         "curves": curves,
     }

@@ -23,6 +23,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIEWER = os.path.join(ROOT, "app", "web", "js", "viewer3d.js")
 STYLE = os.path.join(ROOT, "app", "web", "style.css")
 INDEX = os.path.join(ROOT, "app", "web", "index.html")
+UI = os.path.join(ROOT, "app", "web", "js", "ui.js")
 
 # Мок на WebGL: записва uniform-ите, за да се проверят матрицата и мащабът.
 HARNESS = r"""
@@ -170,6 +171,106 @@ class TestViewer3D(unittest.TestCase):
         self.assertEqual(data["triangles"], self.data["triangles"])
 
 
+CAMERA_HARNESS = r"""
+const fs = require('fs');
+const src = fs.readFileSync(process.argv[2], 'utf8');
+const payload = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+global.window = { devicePixelRatio: 1, addEventListener: () => {} };
+const canvas = () => ({ getContext: () => null, addEventListener: () => {},
+  style: {}, width: 900, height: 460, dataset: {}, removeAttribute: () => {},
+  cloneNode: () => canvas(), parentNode: { replaceChild: () => {} } });
+global.document = { getElementById: () => canvas() };
+eval(src + '\nglobal.Viewer = Viewer;');
+Viewer.init();
+Viewer.setModel(payload.model);
+const out = {};
+const P = payload.point;
+const before = Viewer.project(P[0], P[1], P[2]);
+// местене: точката следва мишката (+30 px надясно, +20 px надолу)
+Viewer.panBy(30, 20);
+const afterPan = Viewer.project(P[0], P[1], P[2]);
+out.pan = [afterPan[0] - before[0], afterPan[1] - before[1]];
+out.custom = Viewer.custom;
+// приближаване към точката: тя остава под курсора
+Viewer.zoomAt(4.0, afterPan[0], afterPan[1]);
+const afterZoom = Viewer.project(P[0], P[1], P[2]);
+out.zoomShift = [afterZoom[0] - afterPan[0], afterZoom[1] - afterPan[1]];
+out.zoom = Viewer.zoom;
+// въртене: центърът на изгледа (pivot) остава в центъра на екрана
+Viewer._snapPivotDepth();
+const pv = Viewer.pivot.slice();
+// pivot-ът е върху модела: има връх на по-малко от 3 % от размаха
+const mesh = Viewer.meshData();
+let nearest = Infinity;
+mesh.vlist.forEach((v) => {
+  nearest = Math.min(nearest, Math.hypot(v[0] - pv[0], v[1] - pv[1], v[2] - pv[2]));
+});
+out.pivotToModel = nearest;
+Viewer.yaw += 0.7; Viewer.pitch = 0.2; Viewer.render();
+const c = Viewer.project(pv[0], pv[1], pv[2]);
+out.pivotOnScreen = [c[0] - Viewer.w / 2, c[1] - Viewer.h / 2];
+// нов модел (преизчисление) не нулира свободната камера
+Viewer.setModel(payload.model);
+out.customAfterModel = Viewer.custom;
+// начален изглед
+Viewer.setView('iso');
+out.customAfterReset = Viewer.custom;
+out.zoomAfterReset = Viewer.zoom;
+console.log(JSON.stringify(out));
+"""
+
+
+@unittest.skipUnless(_node(), "няма node — тестовете за камерата се пропускат")
+class TestViewerCamera(unittest.TestCase):
+    """Местене (pan) и приближаване към курсора; въртене около центъра."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        res = design.compute({"mission": "trainer",
+                              "payload": {"mode": "simple", "total_g": 600}})
+        model = geometry3d.build_model(res, quality="low")
+        g = res["geometry"]
+        # точка на върха на дясното крило
+        point = [g["wing_le_mm"], g["span_mm"] / 2.0 * 0.9, 50.0]
+        folder = tempfile.mkdtemp()
+        harness = os.path.join(folder, "camera.js")
+        payload = os.path.join(folder, "model.json")
+        with open(harness, "w", encoding="utf-8") as handle:
+            handle.write(CAMERA_HARNESS)
+        with open(payload, "w", encoding="utf-8") as handle:
+            json.dump({"model": model, "point": point}, handle)
+        proc = subprocess.run([_node(), harness, VIEWER, payload],
+                              capture_output=True, text=True, timeout=120)
+        if proc.returncode != 0:
+            raise AssertionError("node: %s" % (proc.stderr or proc.stdout))
+        cls.data = json.loads(proc.stdout)
+
+    def test_pan_follows_the_mouse(self):
+        self.assertAlmostEqual(self.data["pan"][0], 30.0, places=4)
+        self.assertAlmostEqual(self.data["pan"][1], 20.0, places=4)
+        self.assertTrue(self.data["custom"])
+
+    def test_zoom_keeps_the_point_under_the_cursor(self):
+        self.assertAlmostEqual(self.data["zoom"], 4.0, places=6)
+        self.assertAlmostEqual(self.data["zoomShift"][0], 0.0, places=4)
+        self.assertAlmostEqual(self.data["zoomShift"][1], 0.0, places=4)
+
+    def test_rotation_is_about_the_view_centre(self):
+        self.assertAlmostEqual(self.data["pivotOnScreen"][0], 0.0, places=4)
+        self.assertAlmostEqual(self.data["pivotOnScreen"][1], 0.0, places=4)
+
+    def test_pivot_lies_on_the_viewed_part(self):
+        # след местене/приближаване въртенето е около частта в центъра,
+        # а не около точка във въздуха (там моделът „отлита“ при въртене)
+        self.assertLess(self.data["pivotToModel"], 40.0)
+
+    def test_recompute_keeps_camera_and_view_buttons_reset_it(self):
+        self.assertTrue(self.data["customAfterModel"])
+        self.assertFalse(self.data["customAfterReset"])
+        self.assertEqual(self.data["zoomAfterReset"], 1)
+
+
 class TestViewerStyles(unittest.TestCase):
     """Регресия: overlay-ът не бива да е непрозрачен (скрива модела)."""
 
@@ -179,6 +280,8 @@ class TestViewerStyles(unittest.TestCase):
             cls.css = handle.read()
         with open(INDEX, encoding="utf-8") as handle:
             cls.html = handle.read()
+        with open(UI, encoding="utf-8-sig") as handle:
+            cls.ui = handle.read()
 
     def test_overlay_is_transparent(self):
         block = self.css.split("#model3dOverlay", 1)[1].split("}", 1)[0]
@@ -194,6 +297,16 @@ class TestViewerStyles(unittest.TestCase):
 
     def test_style_has_cache_busting(self):
         self.assertIn("style.css?v=", self.html)
+
+    def test_select_options_have_readable_dark_theme_colors(self):
+        self.assertIn("#tailAirfoil {\n  color-scheme: dark;", self.css)
+        option_style = self.css.split("#tailAirfoil option {", 1)[1]
+        option_style = option_style.split("}", 1)[0]
+        self.assertIn("background: #131a23", option_style)
+        self.assertIn("color: var(--text)", option_style)
+
+    def test_tail_airfoil_options_use_catalog_names(self):
+        self.assertIn('fill("tailAirfoil", p.airfoils, "name")', self.ui)
 
 
 if __name__ == "__main__":

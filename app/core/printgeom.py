@@ -502,6 +502,97 @@ def lifting_surface(chord_root_mm, chord_tip_mm, span_mm, airfoil_key,
     return loft_shell(outer, inner)
 
 
+SPAR_CAP_CHORD_FRAC = 0.30   # ос на печатаните спарови капси (дял от хордата)
+
+
+def _cap_layout(st):
+    """Ширина/дебелина на капса и разделяне на ленти около карбона."""
+    cap_w = float(st.get("cap_width_mm") or 0.0)
+    wall = max(0.2, float(st.get("wall_mm") or 0.45))
+    cap_t = max(0.4, wall)
+    carbon = st.get("carbon") or {}
+    carbon_needed = bool(st.get("carbon_required")) and \
+        int(carbon.get("count") or 0) > 0
+    gap = min(0.6 * cap_w, float(carbon.get("width_mm") or 0.0) + 0.3) \
+        if carbon_needed else 0.0
+    strips = 2 if gap > 0.5 else 1
+    strip_w = (cap_w - gap) / strips if strips == 2 else cap_w
+    if strip_w <= 0.3:
+        strips, strip_w, gap = 1, cap_w, 0.0
+    return cap_w, cap_t, carbon_needed, gap, strips, strip_w
+
+
+def spar_section(res, points=60):
+    """
+    Данни за схемата „спар и джойнер“ в UI (кореново сечение и план).
+
+    Позициите и размерите са същите като в spar_caps / joiner_channel,
+    за да показва схемата това, което отива в експорта. Размерите са в mm
+    в координати на кореновото сечение (x от водещия ръб, y нагоре).
+    """
+    if not res or not res.get("ok"):
+        return None
+    g = res.get("geometry") or {}
+    st = res.get("structure") or {}
+    c_root = float(g.get("c_root_mm") or 0.0)
+    if c_root <= 10.0:
+        return None
+    key = (g.get("airfoil") or {}).get("key") or airfoils.DEFAULT_AIRFOIL
+    upper, lower = _profile_lines(key, int(points))
+    cap_w, cap_t, carbon_needed, gap, strips, strip_w = _cap_layout(st)
+    x_cap = SPAR_CAP_CHORD_FRAC
+    half = (cap_w / 2.0) / max(1.0, c_root)
+    y_top = min(_interp_y(upper, x_cap - half), _interp_y(upper, x_cap),
+                _interp_y(upper, x_cap + half)) * c_root
+    y_bot = max(_interp_y(lower, x_cap - half), _interp_y(lower, x_cap),
+                _interp_y(lower, x_cap + half)) * c_root
+    carbon = st.get("carbon") or {}
+    tube = st.get("joiner_tube") or {}
+    channel = joiner_channel(res)
+    joiner = None
+    if channel:
+        joiner = dict(channel)
+        joiner.update({
+            "id_mm": tube.get("id_mm"),
+            "length_mm": tube.get("length_mm"),
+            "material": tube.get("material"),
+            "count": tube.get("count"),
+        })
+    return {
+        "airfoil": key,
+        "chord_mm": round(c_root, 2),
+        "upper": [[round(x * c_root, 2), round(y * c_root, 2)]
+                  for x, y in upper],
+        "lower": [[round(x * c_root, 2), round(y * c_root, 2)]
+                  for x, y in lower],
+        "wall_mm": round(max(0.2, float(st.get("wall_mm") or 0.45)), 2),
+        "cap": {
+            "x_mm": round(x_cap * c_root, 2),
+            "width_mm": round(cap_w, 2),
+            "thickness_mm": round(cap_t, 2),
+            "y_top_mm": round(y_top, 2),
+            "y_bottom_mm": round(y_bot, 2),
+            "strips": strips,
+            "strip_width_mm": round(strip_w, 2),
+            "gap_mm": round(gap, 2),
+        },
+        "carbon": {
+            "needed": carbon_needed,
+            "material": st.get("spar_material"),
+            "width_mm": carbon.get("width_mm"),
+            "thickness_mm": carbon.get("thickness_mm"),
+            "count": carbon.get("count"),
+        },
+        "spar_height_mm": round(float(st.get("spar_height_mm") or 0.0), 2),
+        "joiner": joiner,
+        "planform": {
+            "semispan_mm": round(float(g.get("span_mm") or 0.0) / 2.0, 2),
+            "c_root_mm": round(c_root, 2),
+            "c_tip_mm": round(float(g.get("c_tip_mm") or 0.0), 2),
+        },
+    }
+
+
 def spar_caps(res, chord_root_mm, chord_tip_mm, span_mm, airfoil_key,
               wall_mm, dihedral_deg=0.0, twist_deg=0.0,
               stations=WING_STATIONS, mirrored=False, chord_fn=None,
@@ -518,19 +609,11 @@ def spar_caps(res, chord_root_mm, chord_tip_mm, span_mm, airfoil_key,
     if cap_w <= 0:
         return Mesh()
     wall = max(0.2, float(wall_mm))
-    cap_t = max(0.4, wall)
-    carbon = st.get("carbon") or {}
-    carbon_needed = bool(st.get("carbon_required")) and \
-        int(carbon.get("count") or 0) > 0
-    gap = min(0.6 * cap_w, float(carbon.get("width_mm") or 0.0) + 0.3) \
-        if carbon_needed else 0.0
-    strips = 2 if gap > 0.5 else 1
-    strip_w = (cap_w - gap) / strips if strips == 2 else cap_w
-    if strip_w <= 0.3:
-        strips, strip_w, gap = 1, cap_w, 0.0
+    # разкройката на лентите е обща със spar_section (стената е подадената)
+    _, cap_t, _, gap, strips, strip_w = _cap_layout(dict(st, wall_mm=wall))
 
     upper, lower = _profile_lines(airfoil_key, int(points or OUTLINE_POINTS))
-    x_cap = 0.30
+    x_cap = SPAR_CAP_CHORD_FRAC
     half = (cap_w / 2.0) / max(1.0, chord_root_mm)
     y_top = min(_interp_y(upper, x_cap - half),
                 _interp_y(upper, x_cap),
@@ -671,7 +754,8 @@ def tail_meshes(res, wall_mm=None, quality=None):
     b_v = float(tail.get("b_v_mm") or 0.0)
     c_v = float(tail.get("c_v_mm") or 0.0)
     if b_v > 10.0 and c_v > 10.0:
-        mesh = lifting_surface(c_v, c_v * aero.TAIL_TAPER_V, b_v, key, wall,
+        fin_key = g.get("fin_airfoil") or airfoils.fin_airfoil(key)
+        mesh = lifting_surface(c_v, c_v * aero.TAIL_TAPER_V, b_v, fin_key, wall,
                                0.0, 0.0, tail_stations, False,
                                points=tail_points)
         out.append({"name": "Кил", "file": "tail_vertical.stl",
@@ -683,13 +767,92 @@ def tail_meshes(res, wall_mm=None, quality=None):
 # --------------------------------------------------------------------------
 # Сглобяване на частите, план за печат и експорт
 # --------------------------------------------------------------------------
-def build_parts(res, quality=None):
+# --------------------------------------------------------------------------
+# Канали за джойнера (съединителна тръба)
+# --------------------------------------------------------------------------
+CHANNEL_CLEARANCE_MM = 0.3   # луфт между тръбата и канала (диаметрален)
+CHANNEL_MIN_WALL_MM = 1.2    # минимална стена между канала и повърхността
+CHANNEL_CHORD_FRAC = 0.25    # канала е на 1/4 хорда (около оста на спара)
+CUTTER_SEGMENTS = 24
+
+
+def joiner_channel(res):
+    """
+    Геометрия на канала за джойнера в една полуполовина на крилото.
+
+    Всяка половина получава един канал на 1/4 хорда, в средата на
+    дебелината, дълбок L/2 (същият дял, който смята лепилната връзка).
+    Връща None, ако няма тръба (дървено/печатано крило без джойнер) или
+    геометрията е твърде малка. Стенната граница се проверява спрямо
+    профила; ok=False означава, че канала е твърде близо до повърхността.
+    """
+    if not res or not res.get("ok"):
+        return None
+    g = res.get("geometry") or {}
+    st = res.get("structure") or {}
+    tube = st.get("joiner_tube") or {}
+    od = tube.get("od_mm")
+    length = tube.get("length_mm")
+    c_root = float(g.get("c_root_mm") or 0.0)
+    if not od or not length or c_root <= 10.0:
+        return None
+    key = (g.get("airfoil") or {}).get("key") or airfoils.DEFAULT_AIRFOIL
+    coords = airfoils.coordinates_for(key, OUTLINE_POINTS + 1)
+    if not coords:
+        coords = airfoils.coordinates_for(airfoils.DEFAULT_AIRFOIL,
+                                          OUTLINE_POINTS + 1)
+    upper = [(float(x), float(y)) for x, y in coords["upper"]]
+    lower = [(float(x), float(y)) for x, y in coords["lower"]]
+    fx = CHANNEL_CHORD_FRAC
+    up = _interp_y(upper, fx) * c_root
+    lo = _interp_y(lower, fx) * c_root
+    bore = float(od) + CHANNEL_CLEARANCE_MM
+    margin = (up - lo) / 2.0 - bore / 2.0
+    return {
+        "x_mm": round(fx * c_root, 2),
+        "y_mm": round((up + lo) / 2.0, 2),
+        "bore_mm": round(bore, 2),
+        "od_mm": float(od),
+        "depth_mm": round(float(length) / 2.0, 2),
+        "wall_margin_mm": round(margin, 2),
+        "ok": margin >= CHANNEL_MIN_WALL_MM,
+    }
+
+
+def joiner_cutter(channel, segments=CUTTER_SEGMENTS):
+    """
+    Цилиндър за канала като затворен меш (негативен обем за слайсера).
+
+    Оста е по Z от корена (Z = 0) навътре; започва на 1 mm извън корена,
+    за да няма съвпадащи повърхнини при изрязването.
+    """
+    mesh = Mesh()
+    r = channel["bore_mm"] / 2.0
+    cx, cy = channel["x_mm"], channel["y_mm"]
+    z_lo, z_hi = -1.0, channel["depth_mm"]
+    ring_lo, ring_hi = [], []
+    for i in range(segments):
+        a = 2.0 * math.pi * i / segments
+        x, y = cx + r * math.cos(a), cy + r * math.sin(a)
+        ring_lo.append(mesh.vertex((x, y, z_lo)))
+        ring_hi.append(mesh.vertex((x, y, z_hi)))
+    bridge(mesh, ring_lo, ring_hi)
+    cap_fan(mesh, ring_lo, (cx, cy, z_lo), reverse=True)
+    cap_fan(mesh, ring_hi, (cx, cy, z_hi))
+    return mesh.orient_outward()
+
+
+def build_parts(res, quality=None, cutters=None):
     """
     Всички печатаеми части като затворени обеми.
 
     връща [{"name", "file", "mesh", "note"}] — геометрията е в mm и в
     ориентация за печат (частта лежи на леглото).
     Плътността идва от нивото за качество (stl_*).
+
+    Ако е подаден списък `cutters`, в него се добавят каналите за
+    джойнерите (негативни обеми, виж joiner_channel) — те НЕ са части за
+    печат и не влизат в print_plan.
     """
     if not res or not res.get("ok"):
         return []
@@ -721,6 +884,8 @@ def build_parts(res, quality=None):
     stations = max(int(q["stl_wing"]), 16) if dense else int(q["stl_wing"])
     wing_points = int(q["stl_points"])
 
+    channel = joiner_channel(res)
+
     if semispan > 10.0 and c_root > 10.0:
         for name, mirrored, filename in (
                 ("Крило — дясна половина", False, "wing_right.stl"),
@@ -737,8 +902,17 @@ def build_parts(res, quality=None):
                                  upturn_deg=upturn,
                                  upturn_frac=upturn_frac,
                                  points=wing_points))
+            x0, y0, z0, _, _, _ = mesh.bbox()
             parts.append({"name": name, "file": filename,
                           "mesh": mesh.to_bed()})
+            if cutters is not None and channel:
+                cut = joiner_cutter(channel)
+                cut.move(-x0, -y0, -z0)
+                cutters.append({
+                    "name": name.replace("Крило", "Канал джойнер"),
+                    "file": filename.replace("wing", "channel"),
+                    "mesh": cut,
+                })
 
     # Уинглет: отделна част за печат (лепи се на върха), за да не се
     # обръща черупката на 90° и да остане крилото печатаемо.
@@ -832,9 +1006,15 @@ def notes_for(plan):
         notes.append("Не се побират в леглото: %s. Разделянето по станции "
                      "(сегменти с гнезда) е следващата стъпка."
                      % ", ".join(big))
-    notes.append("Корените са затворени с пръстен. Гнездото за "
-                 "съединителната тръба и шпангоутите се добавят при "
-                 "сегментирането.")
+    notes.append("Корените са затворени с пръстен. Каналът за "
+                 "съединителната тръба НЕ е прорязан в частите — дадени "
+                 "са като channel_*.stl (негативен обем): в слайсера се "
+                 "добавят като 'negative volume' към крилото.")
+    jc = plan.get("joiner_channel")
+    if jc and not jc.get("ok", True):
+        notes.append("Стената около канала е %.2f mm (под %.1f mm). Увеличи "
+                     "профила или намали тръбата."
+                     % (jc["wall_margin_mm"], CHANNEL_MIN_WALL_MM))
     notes.append("Спаровите капси са отделни тела в същия STL — слайсерът "
                  "ги обединява с обшивката.")
     return notes
@@ -849,7 +1029,8 @@ def export(res, base_dir, bed, filament=None, slugify=None, subdir="stl",
     """
     if not res or not res.get("ok"):
         return {"ok": False, "error": "няма изчислен дизайн"}
-    parts = build_parts(res, quality=quality)
+    cutters = []
+    parts = build_parts(res, quality=quality, cutters=cutters)
     if not parts:
         return {"ok": False, "error": "няма части за експорт"}
 
@@ -870,8 +1051,17 @@ def export(res, base_dir, bed, filament=None, slugify=None, subdir="stl",
                       "triangles": info["triangles"],
                       "bytes": info["bytes"]})
 
+    for part in cutters:
+        path = os.path.join(folder, part["file"])
+        info = stl_mod.write_stl(path, part["mesh"].vertices,
+                                 part["mesh"].faces, part["name"])
+        files.append({"file": part["file"], "path": path,
+                      "triangles": info["triangles"],
+                      "bytes": info["bytes"], "role": "channel_cutter"})
+
     plan["generated"] = datetime.datetime.now().isoformat(timespec="seconds")
     plan["files"] = files
+    plan["joiner_channel"] = joiner_channel(res)
     plan["notes"] = notes_for(plan)
     plan_path = os.path.join(folder, "print_plan.json")
     with open(plan_path, "w", encoding="utf-8") as f:

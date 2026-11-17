@@ -60,6 +60,9 @@ JOIN_EMBED_MM = 3.0        # уинглет / T-опашка / спинер: з�
 ROOT_SINK_FRAC = 0.15      # 15% от височината на тялото
 ROOT_SINK_BAND = 0.25      # крилото е „близо до стената“ в тази чест от височината
 ROOT_BLEND_FRAC = 0.30     # до 30% от полуразмаха слягането изчезва
+ROOT_FAIRING_CHORD_RATIO = 1.25   # +25% chord at the wing root
+ROOT_FAIRING_THICK_RATIO = 1.40   # +40% thickness at the wing root
+ROOT_FAIRING_FADE_FRAC = 0.28     # fades to profile by 28% of half span
 
 
 def _unit_outline(airfoil_key, points=CAD_POINTS, chord_mm=200.0):
@@ -268,7 +271,7 @@ def fuselage_rings(res, rings=None, stations=None, quality=None,
         t = start + (1.0 - start) * u
         pts2d = fus_mod.outline(fus, t, rings)
         x = t * length
-        out.append({
+        section = {
             "name": "F%02d" % (i + 1),
             "points3d": [(x, y, v + z_center) for (y, v) in pts2d],
             "points2d": [(y, v) for (y, v) in pts2d],
@@ -277,8 +280,67 @@ def fuselage_rings(res, rings=None, stations=None, quality=None,
             "y_dir": (0.0, 0.0, 1.0),
             "station_mm": x,
             "split": None,
-        })
+        }
+        if abs(float(fus.get("exp") or 2.0) - 2.0) <= 1e-9:
+            # Точно елипса: CAD скицата може да е `sketch.ellipse` вместо
+            # spline през 16+ точки. Контурът остава в points2d за SVG.
+            half_w = max(abs(float(p[0])) for p in pts2d)
+            half_h = max(abs(float(p[1])) for p in pts2d)
+            if half_w > 0.0 and half_h > 0.0:
+                section["primitive"] = {
+                    "type": "ellipse",
+                    "center": (0.0, 0.0),
+                    "major": (half_w, 0.0),
+                    "minor_radius": half_h,
+                }
+        out.append(section)
     return out
+
+
+def fuselage_section(fus, x_mm, rings=48):
+    """
+    Полуширина и полувисочина (спрямо оста) на обшивката при станция x.
+
+    Използва се за луфта на крилото/опашката: тялото се стеснява към
+    опашката, затова максималната ширина/височина дава прекалено голям
+    луфт там.
+    """
+    fus = fus or {}
+    length = float(fus.get("length_mm") or 0.0)
+    half_w = float(fus.get("width_mm") or 0.0) / 2.0
+    half_h = float(fus.get("height_mm") or 0.0) / 2.0
+    if length <= 0 or half_w <= 0 or half_h <= 0:
+        return half_w, half_h
+    t = min(max(0.0, float(x_mm) / length), 1.0)
+    pts = fus_mod.outline(fus, t, max(24, int(rings)))
+    if not pts:
+        return half_w, half_h
+    return (max(abs(float(p[0])) for p in pts),
+            max(abs(float(p[1])) for p in pts))
+
+
+def skin_offset(fus, x_mm, axis):
+    """
+    Разстояние от оста на тялото до обшивката по посока `axis` (y, z).
+
+    За посока (0, 1, 0) това е локалната полуширина, за (0, 0, 1) —
+    локалната полувисочина, а за наклонена ос (V-опашка) — пресечната
+    точка на лъча със суперелипсата. Така "луфт" винаги се мери от
+    обшивката, а не от максималния габарит на тялото.
+    """
+    fus = fus or {}
+    a, b = fuselage_section(fus, x_mm)
+    cy = abs(float(axis[1]))
+    cz = abs(float(axis[2]))
+    norm = math.hypot(cy, cz)
+    if a <= 0.0 or b <= 0.0 or norm <= 1e-9:
+        return 0.0
+    cy, cz = cy / norm, cz / norm
+    n = max(0.5, float(fus.get("exp") or 2.0))
+    denom = (cy / a) ** n + (cz / b) ** n
+    if denom <= 0.0:
+        return 0.0
+    return 1.0 / (denom ** (1.0 / n))
 
 
 def fuselage_solid(res, rings=None, stations=None, quality=None):
@@ -361,6 +423,8 @@ def tail_specs(res, quality=None, exact=False):
     length = float(fus.get("length_mm") or 0.0)
     z_center = height / 2.0
     key = g.get("tail_airfoil") or airfoils.DEFAULT_TAIL_AIRFOIL
+    # килът — винаги със симетричен профил (виж airfoils.fin_airfoil)
+    fin_key = g.get("fin_airfoil") or airfoils.fin_airfoil(key)
     wing_le = float(g.get("wing_le_mm") or 0.0)
     c_root = float(g.get("c_root_mm") or 0.0)
     tail_ac = float(tail.get("tail_ac_mm") or 0.0)
@@ -435,7 +499,7 @@ def tail_specs(res, quality=None, exact=False):
             "chord_root_mm": c_v,
             "chord_tip_mm": c_v * taper_v,
             "span_mm": b_v,
-            "airfoil_key": key,
+            "airfoil_key": fin_key,
             "origin": (tail_x(c_v), 0.0, z_center),
             "span_axis": (0.0, 0.0, 1.0),
             "thick_axis": (0.0, 1.0, 0.0),
@@ -856,7 +920,7 @@ def spinner_revolves(res):
 
 
 def half_rings(spec, sign, points=None, stations=None, spacing="sine",
-               sink_mm=None, root_overlap_mm=None):
+               sink_mm=None, root_overlap_mm=None, root_start_mm=None):
     """
     Сечения на една половина от симетрична повърхност (крило, стабилизатор).
 
@@ -871,7 +935,8 @@ def half_rings(spec, sign, points=None, stations=None, spacing="sine",
     оста, така че двете половини се застъпват, вместо да се допират с лица
     по оста. Допиращите се лица са нестабилен boolean; застъпването е
     същото правило, по което телата в модела ползват `JOIN_EMBED_MM`.
-    Върхът не мърда.
+    `root_start_mm` задава началната станция на корена по размаха (за луфт
+    към тялото). Върхът не мърда.
 
     `sign` = +1 дясна, -1 лява половина.
     """
@@ -881,7 +946,9 @@ def half_rings(spec, sign, points=None, stations=None, spacing="sine",
     half["span_mm"] = max(1.0, float(spec.get("span_mm") or 0.0) / 2.0)
     half["span_axis"] = (float(axis[0]) * sign, float(axis[1]) * sign,
                          float(axis[2]) * sign)
-    if root_overlap_mm:
+    if root_start_mm is not None:
+        half["start_mm"] = float(root_start_mm)
+    elif root_overlap_mm:
         half["start_mm"] = -abs(float(root_overlap_mm))
     if points is not None:
         half["points"] = int(points)
@@ -892,6 +959,161 @@ def half_rings(spec, sign, points=None, stations=None, spacing="sine",
     if sink_mm is not None:
         half["sink_mm"] = float(sink_mm)
     return surface_rings(**half)
+
+
+def wing_root_fairing(sections, half_span_mm, fade_span_mm=None):
+    """
+    Root fairing for the CAD loft: chord and thickness are enlarged at the
+    root and fade smoothly back to the chosen profile by `fade_span_mm` along
+    the span. It does not move sections (origin stays) and does not move the
+    tip - only scales each section's outline in its sketch plane about the
+    quarter chord and the mid-thickness, so the quarter chord stays put.
+    Used for the CAD loft only; print mesh (STL/3MF) and SVG sections are
+    unchanged.
+
+    returns a new list of sections; each scaled section carries
+    `root_fairing = {"chord_scale", "thick_scale"}`.
+    """
+    if not sections:
+        return list(sections)
+    half_span_mm = max(1e-9, float(half_span_mm or 0.0))
+    fade = (float(fade_span_mm) if fade_span_mm is not None
+            else ROOT_FAIRING_FADE_FRAC * half_span_mm)
+    fade = max(1e-9, fade)
+    # Разстояние от корена: при застъпване първото сечение е с отрицателна
+    # станция и трябва да получи пълния мащаб, а не намален.
+    root_station = float(sections[0].get("station_mm") or 0.0)
+    out = []
+    for section in sections:
+        station = abs(float(section.get("station_mm") or 0.0) - root_station)
+        w = max(0.0, 1.0 - station / fade)
+        if w <= 0.0:
+            out.append(section)
+            continue
+        chord_scale = 1.0 + (ROOT_FAIRING_CHORD_RATIO - 1.0) * w
+        thick_scale = 1.0 + (ROOT_FAIRING_THICK_RATIO - 1.0) * w
+        pts2d = section.get("points2d") or []
+        if not pts2d:
+            out.append(section)
+            continue
+        xs = [p[0] for p in pts2d]
+        # Мащабирай около четвърт-хордата: аеродинамичният център не мърда,
+        # хордата расте напред и назад.
+        cx = min(xs) + 0.25 * (max(xs) - min(xs))
+        cz = 0.5 * (min(p[1] for p in pts2d) + max(p[1] for p in pts2d))
+        fair2d = [(cx + (p[0] - cx) * chord_scale,
+                   cz + (p[1] - cz) * thick_scale) for p in pts2d]
+        origin = section.get("origin") or (0.0, 0.0, 0.0)
+        x_dir = section.get("x_dir") or (1.0, 0.0, 0.0)
+        y_dir = section.get("y_dir") or (0.0, 1.0, 0.0)
+        fair3d = [(origin[0] + x_dir[0] * q[0] + y_dir[0] * q[1],
+                   origin[1] + x_dir[1] * q[0] + y_dir[1] * q[1],
+                   origin[2] + x_dir[2] * q[0] + y_dir[2] * q[1])
+                  for q in fair2d]
+        new = dict(section)
+        new["points2d"] = fair2d
+        new["points3d"] = fair3d
+        new["root_fairing"] = {"chord_scale": chord_scale,
+                               "thick_scale": thick_scale}
+        out.append(new)
+    return out
+
+
+AILERON_CUTTER_STATIONS = 4      # сечения на призмата по размаха
+AILERON_CUTTER_TE_MM = 15.0      # призмата излиза зад задния ръб
+AILERON_CUTTER_Z_MM = 30.0       # и над/под профила (диедър, усукване)
+
+
+def _faired_chord_x(x_local, chord, station, root_station, half_span_mm):
+    """
+    Къде отива точка от хордата след `wing_root_fairing` (мащаб около
+    четвърт-хордата в корена, затихва по размаха) — за да следва
+    резачът на елерона реалната CAD хорда и до корена.
+    """
+    fade = max(1e-9, ROOT_FAIRING_FADE_FRAC * half_span_mm)
+    w = max(0.0, 1.0 - abs(station - root_station) / fade)
+    scale = 1.0 + (ROOT_FAIRING_CHORD_RATIO - 1.0) * w
+    cx = 0.25 * chord
+    return cx + (x_local - cx) * scale
+
+
+def aileron_cutters(res, spec, sign, wing_name, root_start_mm=None):
+    """
+    Резачите за елерона на една половина на крилото (за SolidCraft).
+
+    Връща две тела-призми зад линията на пантата:
+      * `Aileron_<R|L>` — от пантата + процепа до зад задния ръб, скъсено
+        в двата края с процепа; сечението му с крилото е елеронът
+        (`op: intersect`, крилото се запазва);
+      * `Aileron_Slot_<R|L>` — от пантата до зад задния ръб, по цялата
+        дължина на елерона; изрязва се от крилото (`op: cut`) и оставя
+        процепа около елерона.
+
+    Хордата, диедърът и станциите са като в `surface_rings` за същата
+    половина, така че линията на пантата е на `1 - chord_frac` от
+    местната хорда.
+    """
+    g = res.get("geometry") or {}
+    ail = g.get("ailerons") or {}
+    if not ail.get("enabled") or not spec:
+        return []
+    semi = float(spec.get("span_mm") or 0.0) / 2.0
+    if semi <= 1.0:
+        return []
+    start = float(root_start_mm or 0.0)
+    c_root = float(spec["chord_root_mm"])
+    c_tip = float(spec["chord_tip_mm"])
+    chord_fn = spec.get("chord_fn")
+    tan_dih = math.tan(math.radians(float(spec.get("dihedral_deg") or 0.0)))
+    origin = spec["origin"]
+    cf = float(ail.get("chord_frac") or 0.2)
+    gap = float(ail.get("hinge_gap_mm") or 0.0)
+    end_gap = float(ail.get("end_gap_mm") or 0.0)
+    y0 = float(ail.get("y_start_mm") or 0.0)
+    y1 = float(ail.get("y_end_mm") or 0.0)
+    if y1 - y0 <= 2.0 * end_gap + 5.0 or y0 <= start:
+        return []
+
+    def section_at(y, hinge_offset, index):
+        f = (y - start) / max(1e-9, semi - start)
+        chord = (chord_fn(f) if chord_fn is not None
+                 else c_root + (c_tip - c_root) * f)
+        hinge = _faired_chord_x((1.0 - cf) * chord, chord, y, start, semi)
+        te = _faired_chord_x(chord, chord, y, start, semi)
+        x0 = origin[0] + hinge + hinge_offset
+        x1 = origin[0] + te + AILERON_CUTTER_TE_MM
+        zc = origin[2] + y * tan_dih
+        dz = 0.5 * chord + AILERON_CUTTER_Z_MM
+        pts2d = [(x0, zc - dz), (x1, zc - dz), (x1, zc + dz), (x0, zc + dz)]
+        yy = sign * y
+        return {
+            "name": "S%02d" % (index + 1),
+            "points2d": pts2d,
+            "points3d": [(px, yy, pz) for px, pz in pts2d],
+            "origin": (0.0, yy, 0.0),
+            "x_dir": (1.0, 0.0, 0.0),
+            "y_dir": (0.0, 0.0, 1.0),
+            "station_mm": yy,
+            "split": None,
+            "primitive": {"type": "polygon"},
+        }
+
+    def prism(ya, yb, hinge_offset):
+        n = AILERON_CUTTER_STATIONS
+        return [section_at(ya + (yb - ya) * i / n, hinge_offset, i)
+                for i in range(n + 1)]
+
+    side = "R" if sign > 0 else "L"
+    name = "Aileron_%s" % side
+    slot = "Aileron_Slot_%s" % side
+    return [
+        {"name": name, "kind": "loft", "cutter": True,
+         "sections": prism(y0 + end_gap, y1 - end_gap, gap),
+         "op": "intersect", "with": wing_name, "after": wing_name},
+        {"name": slot, "kind": "loft", "cutter": True,
+         "sections": prism(y0, y1, 0.0),
+         "op": "cut", "from": wing_name, "after": name},
+    ]
 
 
 def shift_rings(sections, dz):
@@ -918,7 +1140,8 @@ def shift_rings(sections, dz):
 
 def loft_bodies(res, quality=None, detail=None, joins=True, split=True,
                 sink_mm=None, exact_tail=False, nose_one_piece=False,
-                tail_lift_mm=None, join_tail=False):
+                tail_lift_mm=None, join_tail=False,
+                wing_root_gap_mm=None, tail_root_gap_mm=None):
     """
     Телата за гладкия loft в SolidCraft: сечения + равнини на скиците.
 
@@ -961,6 +1184,15 @@ def loft_bodies(res, quality=None, detail=None, joins=True, split=True,
         out.append({"name": "Fuselage", "kind": "loft",
                     "sections": sections})
 
+    wing_gap = max(0.0, min(40.0, float(
+        (res.get("layout") or {}).get("wing_root_gap_mm", 10.0) or 0.0)))
+    tail_gap = max(0.0, min(40.0, float(
+        (res.get("layout") or {}).get("tail_root_gap_mm", 10.0) or 0.0)))
+    if wing_root_gap_mm is not None:
+        wing_gap = max(0.0, min(40.0, float(wing_root_gap_mm)))
+    if tail_root_gap_mm is not None:
+        tail_gap = max(0.0, min(40.0, float(tail_root_gap_mm)))
+
     if joins:
         nose = nose_revolve(res) if nose_one_piece else None
         if nose:
@@ -978,29 +1210,42 @@ def loft_bodies(res, quality=None, detail=None, joins=True, split=True,
 
     spec = wing_spec(res, quality, sink_mm=sink)
     if spec:
-        if split:
+        fuselage = (res.get("geometry") or {}).get("fuselage") or {}
+        # Коренът стъпва на обшивката в станцията на крилото (+ луфт), а не
+        # на максималната полуширина на тялото.
+        wing_root = (skin_offset(fuselage, spec["origin"][0], (0.0, 1.0, 0.0))
+                     + wing_gap) if (joins and wing_gap > 0) else 0.0
+        if split or (joins and wing_gap > 0):
             # две половини: boolean-ът с цялото крило минава през тялото и
             # SolidCraft не го смята (виж `half_rings`)
             for sign, name in ((1.0, "Wing_R"), (-1.0, "Wing_L")):
-                # коренът влиза няколко mm отвъд оста: двете половини се
-                # застъпват, вместо да се допират с лица (стабилен boolean)
-                sections = half_rings(spec, sign, points, stations, "sine",
-                                      root_overlap_mm=(
-                                          JOIN_EMBED_MM if joins else 0.0))
+                # коренът започва на кожа + луфт; двете половини са
+                # отделни тела с плоска страна, без мостове
+                sections = half_rings(
+                    spec, sign, points, stations, "sine",
+                    root_overlap_mm=0.0,
+                    root_start_mm=(wing_root if wing_root > 0 else None))
                 if not sections:
                     continue
+                sections = wing_root_fairing(sections, spec["span_mm"] / 2.0)
                 body = {"name": name, "kind": "loft", "sections": sections}
-                if joins:
+                if joins and wing_gap <= 0:
                     body["into"] = "Fuselage"
                     body["embed_mm"] = sink
                 out.append(body)
+                # елеронът се изрязва от своята половина (intersect + cut)
+                out.extend(aileron_cutters(
+                    res, spec, sign, name,
+                    root_start_mm=(wing_root if wing_root > 0 else 0.0)))
         else:
             sections = surface_rings(**dict(spec, points=points,
                                             stations=stations,
-                                            spacing="sine"))
+                                            spacing="sine",
+                                            start_mm=wing_root))
+            sections = wing_root_fairing(sections, spec["span_mm"] / 2.0)
             if sections:
                 body = {"name": "Wing", "kind": "loft", "sections": sections}
-                if joins:
+                if joins and wing_gap <= 0:
                     body["into"] = "Fuselage"
                     body["embed_mm"] = sink
                 out.append(body)
@@ -1019,43 +1264,80 @@ def loft_bodies(res, quality=None, detail=None, joins=True, split=True,
                 body["embed_mm"] = JOIN_EMBED_MM
             out.append(body)
 
+    tail_type = (res.get("layout") or {}).get("tail_type", "conventional")
+    fuselage = (res.get("geometry") or {}).get("fuselage") or {}
+    fin_raise = 0.0
     for name, _filename, spec in tail_specs(res, quality,
                                             exact=exact_tail):
-        if spec.get("symmetric") and split:
-            # хоризонталната опашка лежи на линията на най-голямата ширина
-            # (z = h/2) — там пресечната крива минава по ножа на водещия
-            # ръб и join-ът виси; затова тя се вдига с 15% от височината
-            height = float(((res.get("geometry") or {}).get("fuselage") or {})
-                           .get("height_mm") or 0.0)
-            lift = (float(tail_lift_mm) if tail_lift_mm is not None
-                    else ROOT_SINK_FRAC * height) if joins else 0.0
+        if name == "Fin" and joins:
+            # Коренът на кила стъпва на обшивката в неговата станция, а не
+            # на максималната височина на тялото (то се стеснява към опашката).
+            fin_raise = (skin_offset(fuselage, spec["origin"][0],
+                                     (0.0, 0.0, 1.0)) + tail_gap)
+            sections = surface_rings(**dict(
+                spec, points=points, stations=tail_stations,
+                spacing="sine", start_mm=fin_raise))
+            if sections:
+                out.append({"name": name, "kind": "loft",
+                            "sections": sections})
+            continue
+        if spec.get("symmetric") and (split or (joins and tail_gap > 0)):
+            height = float(fuselage.get("height_mm") or 0.0)
+            into = None          # None = стабилизаторът остава отделно тяло
+            root_start = 0.0
+            root_overlap = 0.0
+            shift = 0.0
+            if joins and tail_type == "t_tail":
+                # лежи на върха на кила: мести се заедно с кила, а не с
+                # тялото; 3 mm застъпване идва от z_stab в `tail_specs`
+                shift = fin_raise
+                if join_tail:
+                    into = "Fin"
+            elif joins and (join_tail or tail_gap <= 0.0):
+                # обединено: коренът влиза в тялото (изрично или защото
+                # луфтът е 0)
+                into = "Fuselage"
+                root_overlap = JOIN_EMBED_MM
+                shift = (float(tail_lift_mm) if tail_lift_mm is not None
+                         else ROOT_SINK_FRAC * height)
+            elif joins:
+                # отделно тяло на кожа + луфт; вдига се над линията на
+                # най-голямата ширина, за да не минава по ножа на водещия ръб
+                root_start = (skin_offset(fuselage, spec["origin"][0],
+                                          (0.0, 1.0, 0.0))
+                              + tail_gap)
+                shift = (float(tail_lift_mm) if tail_lift_mm is not None
+                         else ROOT_SINK_FRAC * height)
             for sign, half_name in ((1.0, "%s_R" % name),
                                     (-1.0, "%s_L" % name)):
-                sections = half_rings(spec, sign, points, tail_stations,
-                                      "sine",
-                                      root_overlap_mm=(JOIN_EMBED_MM
-                                                       if (joins and join_tail)
-                                                       else 0.0))
+                sections = half_rings(
+                    spec, sign, points, tail_stations, "sine",
+                    root_overlap_mm=root_overlap,
+                    root_start_mm=(root_start if root_start > 0 else None))
                 if not sections:
                     continue
+                sections = shift_rings(sections, shift)
                 body = {"name": half_name, "kind": "loft",
-                        "sections": shift_rings(sections, lift)}
-                # Стабилизаторът по подразбиране остава **отделно** тяло:
-                # той лежи близо до линията на най-голямата ширина, профилът
-                # е тънък и boolean-ът в SolidCraft виси (проверено с
-                # вдигане 0.10/0.15/0.25·h и с 3/4 сечения). Отделеното
-                # тяло е валиден solid — обединява се на ръка при нужда.
-                if joins and join_tail:
-                    body["into"] = "Fuselage"
-                    body["embed_mm"] = lift
+                        "sections": sections}
+                if into:
+                    body["into"] = into
+                    body["embed_mm"] = JOIN_EMBED_MM
                 out.append(body)
             continue
-        sections = surface_rings(**dict(spec, points=points,
-                                        stations=tail_stations,
-                                        spacing="sine"))
+        # V-опашка (два наклонени панела): луфтът се мери по оста на панела
+        # от обшивката, а не от централната линия.
+        gap = (0.0 if (joins and join_tail)
+               else (tail_gap if joins else 0.0))
+        start = 0.0
+        if gap > 0 and name.startswith("Stabilizer_V"):
+            start = (skin_offset(fuselage, spec["origin"][0],
+                                 spec["span_axis"]) + gap)
+        sections = surface_rings(**dict(
+            spec, points=points, stations=tail_stations, spacing="sine",
+            start_mm=start))
         if sections:
             body = {"name": name, "kind": "loft", "sections": sections}
-            if joins:
+            if joins and gap <= 0:
                 body["into"] = "Fuselage"
             out.append(body)
 

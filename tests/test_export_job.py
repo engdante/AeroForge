@@ -48,7 +48,10 @@ class TestSteps(unittest.TestCase):
 
     def test_steps_are_in_order(self):
         self.assertEqual(self.ids[0], "prep")
-        self.assertEqual(self.ids[1], "body")
+        # профилите са първата стъпка, която пипа дизайна: aircraft.sc
+        # завършва с тях (без loft), loft-ът е в работния дизайн на групите
+        self.assertEqual(self.ids[1], "profiles")
+        self.assertEqual(self.ids[2], "body")
         self.assertIn("wing", self.ids)
         # двете полукрила НЕ са отделни стъпки: вторият join върху вече
         # променено тяло висеше и оставяше модела с едно крило
@@ -57,22 +60,87 @@ class TestSteps(unittest.TestCase):
         self.assertEqual(self.ids[-1], "finish")
 
     def test_both_wings_share_one_step_and_one_combine(self):
-        wing = [step for step in self.steps if step["id"] == "wing"][0]
+        # С нулеви луфт крилните половини се влизат в тялото (join) и има
+        # combine на мостите. С положителен луфт крилата са отделни тела.
+        wing_gap_bodies = assembly.loft_bodies(
+            self.res, None, FAST,
+            wing_root_gap_mm=0.0, tail_root_gap_mm=0.0)
+        steps = {step["id"]: step for step in se.group_steps(wing_gap_bodies)}
+        wing = steps["wing"]
         self.assertIn("Wing_R", wing["bodies"])
         self.assertIn("Wing_L", wing["bodies"])
-        script = se.group_script(self.bodies, wing["bodies"])
+        script = se.group_script(wing_gap_bodies, wing["bodies"])
+        # един join в тялото; елероните имат свои intersect/cut
         combines = [c for c in script["commands"]
-                    if c["command"] == "solid.combine"]
+                    if c["command"] == "solid.combine"
+                    and c["params"].get("operation") == "join"]
         self.assertEqual(len(combines), 1)
-        self.assertEqual(sorted(combines[0]["params"]["tools"]),
-                         ["Wing_L", "Wing_R"])
+        self.assertIn("Wing_L", wing["bodies"])
+        self.assertIn("Wing_R", wing["bodies"])
 
     def test_every_body_is_in_exactly_one_group(self):
         names = [b["name"] for b in self.bodies]
         grouped = [name for step in self.steps for name in step["bodies"]]
         self.assertEqual(sorted(grouped), sorted(names))
         # основата е първа в групата „тяло“
-        self.assertIn("Fuselage", self.steps[1]["bodies"])
+        by_id = {step["id"]: step for step in self.steps}
+        self.assertIn("Fuselage", by_id["body"]["bodies"])
+        # стъпката с профили няма тела: тя пише само скици в aircraft.sc
+        self.assertEqual(by_id["profiles"]["bodies"], [])
+
+    def test_profiles_script_has_only_profiles(self):
+        """aircraft.sc: скици-профили, без loft / revolve / combine / export."""
+        commands = se.profiles_script(self.bodies)["commands"]
+        kinds = {command["command"] for command in commands}
+        self.assertIn("sketch.create", kinds)
+        for banned in ("solid.loft", "solid.revolve", "solid.combine",
+                       "file.export"):
+            self.assertNotIn(banned, kinds)
+        self.assertTrue(all(command["command"].startswith("sketch.")
+                            for command in commands))
+
+    def test_profiles_cover_the_body_wings_and_tail(self):
+        """Профилите са за тяло, криле и опашка; носът и уинглетите — не."""
+        sketches = [command["params"]["name"]
+                    for command in se.profiles_script(self.bodies)["commands"]
+                    if command["command"] == "sketch.create"]
+        for prefix in ("Fuselage", "Wing_R", "Wing_L", "Fin",
+                       "Stabilizer_R", "Stabilizer_L"):
+            self.assertTrue(any(name.startswith(prefix + " ")
+                                for name in sketches), prefix)
+        for skip in ("Cowl", "Spinner", "Winglet"):
+            self.assertFalse(any(name.startswith(skip) for name in sketches),
+                             skip)
+        self.assertEqual(len(sketches), len(set(sketches)))
+        # на всяка секция от manifest-а има скица (с огледалните половина)
+        self.assertGreater(len(sketches), 20)
+
+    def test_root_gap_makes_separate_bodies_without_bridges(self):
+        # С положителен луфт крила и опашка са отделни тела с плоска страна,
+        # без мостове (root_bridge).
+        bodies = assembly.loft_bodies(
+            result(), None, FAST,
+            wing_root_gap_mm=10.0, tail_root_gap_mm=10.0)
+        names = [b["name"] for b in bodies]
+        self.assertNotIn("WingRootBridge_R", names)
+        self.assertNotIn("WingRootBridge_L", names)
+        self.assertNotIn("TailRootBridge_R", names)
+        self.assertNotIn("TailRootBridge_L", names)
+        self.assertNotIn("FinRootBridge", names)
+        self.assertFalse(any(b.get("root_bridge") for b in bodies))
+        self.assertIn("Wing_R", names)
+        self.assertIn("Wing_L", names)
+        self.assertIn("Fin", names)
+
+    def test_root_gap_zero_joins_wings_into_fuselage(self):
+        # С нулеви луфт крилните половини се влизат в тялото.
+        bodies = assembly.loft_bodies(
+            result(), None, FAST,
+            wing_root_gap_mm=0.0, tail_root_gap_mm=0.0)
+        by_name = {b["name"]: b for b in bodies}
+        self.assertEqual(by_name["Wing_R"].get("into"), "Fuselage")
+        self.assertEqual(by_name["Wing_L"].get("into"), "Fuselage")
+        self.assertFalse(any(b.get("root_bridge") for b in bodies))
 
     def test_steps_have_estimates(self):
         for step in self.steps:
@@ -153,6 +221,12 @@ class TestSymmetryCheck(unittest.TestCase):
         "min": [0.0, -31.7, 0.0], "max": [830.0, 484.7, 160.0]}}]}
     BOTH_WINGS = {"bodies": [{"name": "Fuselage", "bbox": {
         "min": [0.0, -484.7, 0.0], "max": [830.0, 484.7, 160.0]}}]}
+    SEPARATE_STABILIZER_HALVES = {"bodies": [
+        {"name": "Stabilizer_R", "bbox": {
+            "min": [694.8, 0.0, 34.6], "max": [795.0, 183.8, 47.1]}},
+        {"name": "Stabilizer_L", "bbox": {
+            "min": [694.8, -183.8, 34.6], "max": [795.0, 0.0, 47.1]}},
+    ]}
 
     def _job(self, ev):
         return {"res": {"geometry": {"span_mm": 971.0}}, "eval": ev,
@@ -166,6 +240,11 @@ class TestSymmetryCheck(unittest.TestCase):
     def test_symmetric_model_has_no_asymmetry(self):
         self.assertAlmostEqual(export_job.max_asymmetry_mm(self.BOTH_WINGS),
                                0.0, places=6)
+
+    def test_separate_symmetric_parts_are_checked_as_one_model(self):
+        self.assertAlmostEqual(
+            export_job.max_asymmetry_mm(self.SEPARATE_STABILIZER_HALVES),
+            0.0, places=6)
 
     def test_warning_names_the_asymmetry(self):
         job = self._job(self.ONE_WING)
@@ -261,6 +340,28 @@ class TestJobWithoutCli(unittest.TestCase):
         self.assertTrue(manifest["steps"])
         self.assertIn("files", manifest)
         self.assertIn("wing", manifest)
+
+
+class TestManifestRootGaps(unittest.TestCase):
+    def test_manifest_records_both_gaps(self):
+        """Манифестът носи реалните луфтове, а не подразбирането 10 mm."""
+        folder = tempfile.mkdtemp(prefix="af_gaps_")
+        try:
+            state = export_job.start(
+                result(layout={"wing_root_gap_mm": 7, "tail_root_gap_mm": 12}),
+                folder, detail=FAST, options={"run": False},
+                slugify=lambda _name: "gaps")
+            job = state["job"]
+            out = state["folder"]
+            for index in range(len(export_job.JOBS[job]["steps"])):
+                export_job.run_step(job, index)
+            with open(os.path.join(out, "model_manifest.json"),
+                      encoding="utf-8") as f:
+                manifest = json.load(f)
+            self.assertEqual(manifest["wing"]["root_gap_mm"], 7.0)
+            self.assertEqual(manifest["tail"]["root_gap_mm"], 12.0)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 class TestCancel(unittest.TestCase):

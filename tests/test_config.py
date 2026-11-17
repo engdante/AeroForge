@@ -53,6 +53,29 @@ class TestDefaultsAreBackwardsCompatible(unittest.TestCase):
         self.assertIn("fuselage", res["inputs"])
         self.assertIn("layout", res["inputs"])
 
+    def test_wing_and_tail_root_gap_default_to_ten_and_are_clamped(self):
+        default = base()
+        self.assertEqual(default["inputs"]["layout"]["wing_root_gap_mm"], 10.0)
+        self.assertEqual(default["inputs"]["layout"]["tail_root_gap_mm"], 10.0)
+        self.assertEqual(default["layout"]["wing_root_gap_mm"], 10.0)
+        self.assertEqual(default["layout"]["tail_root_gap_mm"], 10.0)
+        self.assertEqual(base(layout={"wing_root_gap_mm": 22})
+                         ["inputs"]["layout"]["wing_root_gap_mm"], 22.0)
+        self.assertEqual(base(layout={"wing_root_gap_mm": 90})
+                         ["inputs"]["layout"]["wing_root_gap_mm"], 40.0)
+        self.assertEqual(base(layout={"wing_root_gap_mm": -5})
+                         ["inputs"]["layout"]["wing_root_gap_mm"], 0.0)
+        self.assertEqual(base(layout={"tail_root_gap_mm": 22})
+                         ["inputs"]["layout"]["tail_root_gap_mm"], 22.0)
+        self.assertEqual(base(layout={"tail_root_gap_mm": 90})
+                         ["inputs"]["layout"]["tail_root_gap_mm"], 40.0)
+        self.assertEqual(base(layout={"tail_root_gap_mm": -5})
+                         ["inputs"]["layout"]["tail_root_gap_mm"], 0.0)
+        # Backwards compatibility: стария ключ root_gap_mm се прилага за двете
+        legacy = base(layout={"root_gap_mm": 15})
+        self.assertEqual(legacy["inputs"]["layout"]["wing_root_gap_mm"], 15.0)
+        self.assertEqual(legacy["inputs"]["layout"]["tail_root_gap_mm"], 15.0)
+
 
 class TestFuselageControl(unittest.TestCase):
     def test_length_override_changes_tail_and_mass(self):
@@ -108,16 +131,22 @@ class TestFuselageControl(unittest.TestCase):
 
 class TestMotorPlacement(unittest.TestCase):
     def test_pusher_moves_cg_back(self):
-        tractor = base()
-        pusher = base(layout={"propulsion": "pusher"})
+        # При фиксирано крило (иначе автоматичното крило балансира и двете)
+        tractor = base(wing={"wing_le_ratio": 0.3})
+        pusher = base(layout={"propulsion": "pusher"},
+                      wing={"wing_le_ratio": 0.3})
         self.assertGreater(pusher["stability"]["cg_pct_mac"],
                            tractor["stability"]["cg_pct_mac"])
 
-    def test_pusher_reports_tail_heavy(self):
+    def test_pusher_reports_note_and_auto_wing_balances_it(self):
+        # Крилото е на автоматично позициониране: при бутащо витло то се
+        # премества напред и моделът става балансиран. Бележката остава.
         res = base(layout={"propulsion": "pusher"})
         titles = [c["title"] for c in res["checks"]]
         self.assertIn("Бутащо витло", titles)
-        self.assertFalse(res["stability"]["ready_to_fly"])
+        self.assertTrue(res["stability"]["ready_to_fly"])
+        self.assertAlmostEqual(res["geometry"]["wing_le_mm"],
+                               res["geometry"]["wing_le_recommended_mm"])
 
     def test_twin_uses_two_motors(self):
         res = design.compute({
